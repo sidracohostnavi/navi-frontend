@@ -2,6 +2,8 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import Script from 'next/script';
 
 // ============================================
 // TYPES
@@ -13,19 +15,11 @@ interface Message {
   timestamp: Date;
 }
 
-interface Session {
-  id: string;
-  title: string;
-  preview: string;
-  updatedAt: Date;
-  messages: Message[];
-}
-
-interface SavedInsight {
-  id: string;
-  content: string;
-  sessionId: string;
-  createdAt: Date;
+interface Usage {
+  used: number;
+  cap: number;
+  remaining: number;
+  windowEnd: string;
 }
 
 interface Toast {
@@ -34,296 +28,276 @@ interface Toast {
   type: 'error' | 'success' | 'info';
 }
 
+type Plan = 'free' | 'plus' | 'pro';
+
+// Speech Recognition types
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+
+interface SpeechRecognitionInstance extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+}
+
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognitionInstance;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    turnstile?: {
+      render: (container: HTMLElement, options: {
+        sitekey: string;
+        callback: (token: string) => void;
+        'error-callback'?: () => void;
+        theme?: 'light' | 'dark' | 'auto';
+      }) => string;
+      reset: (widgetId: string) => void;
+      remove: (widgetId: string) => void;
+    };
+    onTurnstileLoad?: () => void;
+  }
+}
+
 // ============================================
 // CONSTANTS
 // ============================================
-const FREE_MESSAGE_LIMIT = 3;
-const STORAGE_KEY_PREFIX = 'orakl_messages_';
+const WELCOME_MESSAGE = `What are we untangling today — a thought loop, a relationship dynamic, or a decision you can't land on?`;
+
+const WELCOME_HINT = `[To be accurate: what happened, who's involved, what you tried, what you fear might be true, and what outcome you want. More context = better help.]`;
+
+const PLAN_DETAILS: Record<Plan, { name: string; price: string; cap: number }> = {
+  free: { name: 'Free', price: '$0', cap: 3 },
+  plus: { name: 'Plus', price: '$9.99/mo', cap: 300 },
+  pro: { name: 'Pro', price: '$24.99/mo', cap: 1200 },
+};
 
 // ============================================
-// MOCK DATA
+// CAPTCHA MODAL
 // ============================================
-const MOCK_SESSIONS: Session[] = [
-  {
-    id: '1',
-    title: 'Work boundary situation',
-    preview: 'My manager keeps messaging me after hours...',
-    updatedAt: new Date('2024-12-30'),
-    messages: [
-      { id: '1a', role: 'user', content: 'My manager keeps messaging me after hours and I don\'t know how to address it without seeming difficult.', timestamp: new Date('2024-12-30T10:00:00') },
-      { id: '1b', role: 'assistant', content: 'Let\'s break this down. First, the facts: your manager messages after hours. Now let\'s separate that from the story you\'re telling yourself—that setting a boundary would make you "difficult." What evidence do you have for that assumption?', timestamp: new Date('2024-12-30T10:01:00') },
-    ],
-  },
-  {
-    id: '2',
-    title: 'Family pattern recognition',
-    preview: 'I noticed I always feel drained after calls with my mother...',
-    updatedAt: new Date('2024-12-28'),
-    messages: [
-      { id: '2a', role: 'user', content: 'I noticed I always feel drained after calls with my mother. It\'s like I become a different person.', timestamp: new Date('2024-12-28T14:00:00') },
-      { id: '2b', role: 'assistant', content: 'That\'s an important observation. The "becoming a different person" feeling often signals we\'re falling into an old role in a family system. What version of yourself shows up on these calls? The peacekeeper? The fixer? The invisible one?', timestamp: new Date('2024-12-28T14:01:00') },
-    ],
-  },
-];
+function CaptchaModal({
+  isOpen,
+  onVerified,
+  onClose,
+}: {
+  isOpen: boolean;
+  onVerified: (token: string) => void;
+  onClose: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const widgetIdRef = useRef<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-const MOCK_INSIGHTS: SavedInsight[] = [
-  { id: 'i1', content: 'When I feel the urge to over-explain, it\'s usually because I\'m anticipating criticism that hasn\'t happened yet.', sessionId: '1', createdAt: new Date('2024-12-30') },
-  { id: 'i2', content: 'The pattern: Mom criticizes → I defend → she escalates → I withdraw. Breaking point: don\'t defend, just acknowledge.', sessionId: '2', createdAt: new Date('2024-12-28') },
-];
+  useEffect(() => {
+    if (!isOpen || !containerRef.current) return;
 
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-function getTodayKey(): string {
-  const today = new Date();
-  return `${STORAGE_KEY_PREFIX}${today.toISOString().split('T')[0]}`;
-}
+    const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+    
+    if (!siteKey) {
+      console.warn('Turnstile site key not configured, skipping captcha');
+      onVerified('skip-no-key');
+      return;
+    }
 
-function getMessagesUsedToday(): number {
-  if (typeof window === 'undefined') return 0;
-  try {
-    const stored = localStorage.getItem(getTodayKey());
-    return stored ? parseInt(stored, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
+    const renderWidget = () => {
+      if (window.turnstile && containerRef.current) {
+        setIsLoading(false);
+        widgetIdRef.current = window.turnstile.render(containerRef.current, {
+          sitekey: siteKey,
+          callback: (token: string) => {
+            onVerified(token);
+          },
+          'error-callback': () => {
+            console.error('Turnstile error');
+          },
+          theme: 'dark',
+        });
+      }
+    };
 
-function incrementMessagesUsed(): number {
-  if (typeof window === 'undefined') return 0;
-  try {
-    const current = getMessagesUsedToday();
-    const newCount = current + 1;
-    localStorage.setItem(getTodayKey(), newCount.toString());
-    return newCount;
-  } catch {
-    return 0;
-  }
-}
+    if (window.turnstile) {
+      renderWidget();
+    } else {
+      window.onTurnstileLoad = renderWidget;
+    }
 
-function checkIsPro(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    // MVP: Check localStorage for pro status
-    // TODO: Replace with real Supabase user metadata check
-    return localStorage.getItem('orakl_is_pro') === 'true';
-  } catch {
-    return false;
-  }
-}
+    return () => {
+      if (widgetIdRef.current && window.turnstile) {
+        window.turnstile.remove(widgetIdRef.current);
+      }
+    };
+  }, [isOpen, onVerified]);
 
-// ============================================
-// INLINE SVG COMPONENTS
-// ============================================
-function OraklHeroSVG() {
+  if (!isOpen) return null;
+
   return (
-    <svg
-      viewBox="0 0 200 120"
-      className="w-full max-w-[280px] h-auto mx-auto mb-6 opacity-80"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <defs>
-        <radialGradient id="glowGradient" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#14b8a6" stopOpacity="0.4" />
-          <stop offset="100%" stopColor="#14b8a6" stopOpacity="0" />
-        </radialGradient>
-        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="2" result="coloredBlur" />
-          <feMerge>
-            <feMergeNode in="coloredBlur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      
-      {/* Glow behind head */}
-      <ellipse cx="100" cy="70" rx="35" ry="40" fill="url(#glowGradient)" />
-      
-      {/* Head silhouette */}
-      <path
-        d="M100 95 C75 95 60 75 60 55 C60 30 78 15 100 15 C122 15 140 30 140 55 C140 75 125 95 100 95"
-        fill="#1e293b"
-        stroke="#334155"
-        strokeWidth="1.5"
-      />
-      
-      {/* Constellation lines emanating from head */}
-      <g stroke="#14b8a6" strokeWidth="0.75" opacity="0.6" filter="url(#glow)">
-        <line x1="100" y1="15" x2="100" y2="5" />
-        <line x1="100" y1="5" x2="85" y2="0" />
-        <line x1="100" y1="5" x2="115" y2="0" />
-        <line x1="85" y1="20" x2="60" y2="5" />
-        <line x1="115" y1="20" x2="140" y2="5" />
-        <line x1="60" y1="55" x2="35" y2="45" />
-        <line x1="35" y1="45" x2="20" y2="55" />
-        <line x1="35" y1="45" x2="25" y2="30" />
-        <line x1="60" y1="70" x2="30" y2="80" />
-        <line x1="30" y1="80" x2="15" y2="70" />
-        <line x1="140" y1="55" x2="165" y2="45" />
-        <line x1="165" y1="45" x2="180" y2="55" />
-        <line x1="165" y1="45" x2="175" y2="30" />
-        <line x1="140" y1="70" x2="170" y2="80" />
-        <line x1="170" y1="80" x2="185" y2="70" />
-        <line x1="60" y1="5" x2="40" y2="15" />
-        <line x1="140" y1="5" x2="160" y2="15" />
-      </g>
-      
-      {/* Constellation dots */}
-      <g fill="#14b8a6" filter="url(#glow)">
-        <circle cx="100" cy="5" r="2" />
-        <circle cx="85" cy="0" r="1.5" />
-        <circle cx="115" cy="0" r="1.5" />
-        <circle cx="60" cy="5" r="2" />
-        <circle cx="140" cy="5" r="2" />
-        <circle cx="40" cy="15" r="1.5" />
-        <circle cx="160" cy="15" r="1.5" />
-        <circle cx="35" cy="45" r="2" />
-        <circle cx="20" cy="55" r="1.5" />
-        <circle cx="25" cy="30" r="1.5" />
-        <circle cx="30" cy="80" r="2" />
-        <circle cx="15" cy="70" r="1.5" />
-        <circle cx="165" cy="45" r="2" />
-        <circle cx="180" cy="55" r="1.5" />
-        <circle cx="175" cy="30" r="1.5" />
-        <circle cx="170" cy="80" r="2" />
-        <circle cx="185" cy="70" r="1.5" />
-      </g>
-      
-      {/* Inner mind dots */}
-      <g fill="#14b8a6" opacity="0.4">
-        <circle cx="85" cy="45" r="1" />
-        <circle cx="115" cy="45" r="1" />
-        <circle cx="100" cy="55" r="1.5" />
-        <circle cx="90" cy="65" r="1" />
-        <circle cx="110" cy="65" r="1" />
-      </g>
-    </svg>
-  );
-}
-
-function OraklLogo({ className = '' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 32 32" className={className} xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#14b8a6" />
-          <stop offset="100%" stopColor="#0d9488" />
-        </linearGradient>
-      </defs>
-      <circle cx="16" cy="16" r="14" fill="none" stroke="url(#logoGradient)" strokeWidth="1.5" />
-      <circle cx="16" cy="12" r="5" fill="none" stroke="url(#logoGradient)" strokeWidth="1.5" />
-      <path d="M10 22 Q16 18 22 22" fill="none" stroke="url(#logoGradient)" strokeWidth="1.5" />
-      <circle cx="16" cy="12" r="1.5" fill="#14b8a6" />
-      <circle cx="10" cy="8" r="1" fill="#14b8a6" opacity="0.6" />
-      <circle cx="22" cy="8" r="1" fill="#14b8a6" opacity="0.6" />
-      <circle cx="8" cy="16" r="1" fill="#14b8a6" opacity="0.4" />
-      <circle cx="24" cy="16" r="1" fill="#14b8a6" opacity="0.4" />
-    </svg>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm w-full">
+        <h3 className="text-lg font-semibold text-slate-100 mb-2 text-center">
+          Quick verification
+        </h3>
+        <p className="text-sm text-slate-400 mb-4 text-center">
+          Please complete the check below to continue
+        </p>
+        
+        {isLoading && (
+          <div className="flex justify-center py-8">
+            <div className="w-8 h-8 border-2 border-slate-600 border-t-teal-500 rounded-full animate-spin" />
+          </div>
+        )}
+        
+        <div ref={containerRef} className="flex justify-center" />
+        
+        <button
+          onClick={onClose}
+          className="mt-4 w-full py-2 text-sm text-slate-500 hover:text-slate-400"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
 // ============================================
-// PAYWALL MODAL COMPONENT
+// PAYWALL MODAL
 // ============================================
 function PaywallModal({
   isOpen,
   onClose,
   onUpgrade,
   isLoading,
+  currentPlan,
+  usage,
+  reason,
 }: {
   isOpen: boolean;
   onClose: () => void;
-  onUpgrade: () => void;
+  onUpgrade: (plan: 'plus' | 'pro') => void;
   isLoading: boolean;
+  currentPlan: Plan;
+  usage?: Usage;
+  reason: 'limit' | 'upgrade';
 }) {
   if (!isOpen) return null;
 
+  const daysUntilReset = usage?.windowEnd
+    ? Math.max(0, Math.ceil((new Date(usage.windowEnd).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div 
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      
-      {/* Modal */}
-      <div className="relative bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-md w-full shadow-2xl">
-        {/* Glow effect */}
-        <div className="absolute inset-0 rounded-2xl bg-gradient-to-b from-teal-500/10 to-transparent pointer-events-none" />
-        
-        {/* Content */}
-        <div className="relative text-center">
-          {/* Icon */}
-          <div className="w-16 h-16 mx-auto mb-6 rounded-full bg-teal-500/10 border border-teal-500/30 flex items-center justify-center">
-            <svg className="w-8 h-8 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-lg w-full">
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-teal-500/10 border border-teal-500/30 flex items-center justify-center">
+            <svg className="w-7 h-7 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
           </div>
           
-          {/* Title */}
-          <h2 className="text-2xl font-semibold text-slate-100 mb-3">
-            Unlock Orakl
+          <h2 className="text-xl font-semibold text-slate-100 mb-2">
+            {reason === 'limit' ? 'Message Limit Reached' : 'Upgrade Your Plan'}
           </h2>
           
-          {/* Description */}
-          <p className="text-slate-400 text-sm leading-relaxed mb-8">
-            You've used your 3 free messages today.<br />
-            Upgrade for unlimited clarity sessions.
-          </p>
-          
-          {/* Features list */}
-          <div className="bg-slate-800/50 rounded-xl p-4 mb-6 text-left">
-            <ul className="space-y-2">
-              {[
-                'Unlimited daily messages',
-                'Save & organize insights',
-                'Priority response times',
-                'Advanced clarity tools',
-              ].map((feature, i) => (
-                <li key={i} className="flex items-center gap-2 text-sm text-slate-300">
-                  <svg className="w-4 h-4 text-teal-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  {feature}
-                </li>
-              ))}
-            </ul>
-          </div>
-          
-          {/* Buttons */}
-          <div className="space-y-3">
-            <button
-              onClick={onUpgrade}
-              disabled={isLoading}
-              className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-500 disabled:bg-teal-600/50 text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <>
-                  <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Redirecting to checkout...
-                </>
-              ) : (
-                <>
-                  Upgrade to Pro
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                </>
+          {reason === 'limit' && usage && (
+            <p className="text-slate-400 text-sm">
+              You&apos;ve used all {usage.cap} messages this period.
+              {daysUntilReset > 0 && (
+                <span className="block mt-1">
+                  Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''}.
+                </span>
               )}
-            </button>
-            
-            <button
-              onClick={onClose}
-              disabled={isLoading}
-              className="w-full py-3 px-4 text-slate-400 hover:text-slate-300 text-sm transition-colors"
-            >
-              Not now
-            </button>
-          </div>
+            </p>
+          )}
         </div>
+
+        <div className="space-y-3 mb-6">
+          {currentPlan === 'free' && (
+            <>
+              <button
+                onClick={() => onUpgrade('plus')}
+                disabled={isLoading}
+                className="w-full p-4 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-teal-500/50 rounded-xl text-left transition-colors disabled:opacity-50"
+              >
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="font-medium text-slate-100">Plus</div>
+                    <div className="text-sm text-slate-400">300 messages / month</div>
+                  </div>
+                  <div className="text-teal-400 font-semibold">$9.99/mo</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => onUpgrade('pro')}
+                disabled={isLoading}
+                className="w-full p-4 bg-gradient-to-r from-teal-900/30 to-slate-800 hover:from-teal-900/50 border border-teal-500/30 hover:border-teal-500/50 rounded-xl text-left transition-colors disabled:opacity-50"
+              >
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="font-medium text-slate-100 flex items-center gap-2">
+                      Pro
+                      <span className="text-xs bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded">Best value</span>
+                    </div>
+                    <div className="text-sm text-slate-400">1,200 messages / month + GPT-4o</div>
+                  </div>
+                  <div className="text-teal-400 font-semibold">$24.99/mo</div>
+                </div>
+              </button>
+            </>
+          )}
+
+          {currentPlan === 'plus' && (
+            <button
+              onClick={() => onUpgrade('pro')}
+              disabled={isLoading}
+              className="w-full p-4 bg-gradient-to-r from-teal-900/30 to-slate-800 hover:from-teal-900/50 border border-teal-500/30 hover:border-teal-500/50 rounded-xl text-left transition-colors disabled:opacity-50"
+            >
+              <div className="flex justify-between items-center">
+                <div>
+                  <div className="font-medium text-slate-100">Upgrade to Pro</div>
+                  <div className="text-sm text-slate-400">1,200 messages / month + GPT-4o</div>
+                </div>
+                <div className="text-teal-400 font-semibold">$24.99/mo</div>
+              </div>
+            </button>
+          )}
+
+          {currentPlan === 'pro' && (
+            <p className="text-center text-slate-400 py-4">
+              You&apos;re on our highest plan. Your limit will reset in {daysUntilReset} days.
+            </p>
+          )}
+        </div>
+
+        {isLoading && (
+          <div className="flex items-center justify-center gap-2 text-slate-400 text-sm mb-4">
+            <div className="w-4 h-4 border-2 border-slate-600 border-t-teal-500 rounded-full animate-spin" />
+            Redirecting to checkout...
+          </div>
+        )}
+
+        <button
+          onClick={onClose}
+          disabled={isLoading}
+          className="w-full py-2 text-sm text-slate-500 hover:text-slate-400"
+        >
+          {reason === 'limit' ? 'Wait for reset' : 'Not now'}
+        </button>
       </div>
     </div>
   );
@@ -338,7 +312,7 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 max-w-sm animate-slide-up ${
+          className={`px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 max-w-sm ${
             toast.type === 'error'
               ? 'bg-red-900/90 border border-red-700 text-red-100'
               : toast.type === 'success'
@@ -347,10 +321,7 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
           }`}
         >
           <span className="text-sm">{toast.message}</span>
-          <button
-            onClick={() => onDismiss(toast.id)}
-            className="text-current opacity-60 hover:opacity-100"
-          >
+          <button onClick={() => onDismiss(toast.id)} className="text-current opacity-60 hover:opacity-100">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -362,159 +333,251 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 }
 
 // ============================================
-// QUICK TOOL BUTTONS
+// ORAKL LOGO
 // ============================================
-const QUICK_TOOLS = [
-  { id: 'clarify', label: 'Clarify the Loop', icon: '🔄', prompt: 'Help me clarify the thought loop I\'m stuck in right now.' },
-  { id: 'connect', label: 'Connect the Dots', icon: '🔗', prompt: 'Help me connect the dots between these events and see the pattern.' },
-  { id: 'reality', label: 'Reality Check', icon: '⚖️', prompt: 'Help me separate facts from assumptions in this situation.' },
-  { id: 'boundary', label: 'Boundary Builder', icon: '🛡️', prompt: 'Help me build a boundary for this situation.' },
-  { id: 'draft', label: 'Message Draft', icon: '✉️', prompt: 'Help me draft a message. I\'ll need versions in calm, firm, and diplomatic tones.' },
-  { id: 'steps', label: 'Next 3 Steps', icon: '📋', prompt: 'What are my next 3 actionable steps for the next 24-72 hours?' },
-];
+function OraklLogo({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#14b8a6" />
+          <stop offset="100%" stopColor="#0d9488" />
+        </linearGradient>
+      </defs>
+      <circle cx="16" cy="16" r="14" fill="none" stroke="url(#logoGrad)" strokeWidth="1.5" />
+      <circle cx="16" cy="12" r="5" fill="none" stroke="url(#logoGrad)" strokeWidth="1.5" />
+      <path d="M10 22 Q16 18 22 22" fill="none" stroke="url(#logoGrad)" strokeWidth="1.5" />
+      <circle cx="16" cy="12" r="1.5" fill="#14b8a6" />
+    </svg>
+  );
+}
 
-const STARTER_CHIPS = [
-  { id: 'family', label: 'Family conflict', prompt: 'I\'m dealing with a family conflict and need clarity.' },
-  { id: 'relationship', label: 'Relationship clarity', prompt: 'I need clarity on a relationship dynamic.' },
-  { id: 'work', label: 'Work tension', prompt: 'I\'m navigating tension at work and need to think it through.' },
-];
+// ============================================
+// VOICE HOOKS
+// ============================================
+function useVoiceInput() {
+  const [isListening, setIsListening] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+
+  useEffect(() => {
+    const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+    setIsSupported(!!SpeechRecognitionClass);
+    
+    if (SpeechRecognitionClass) {
+      recognitionRef.current = new SpeechRecognitionClass();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-US';
+    }
+  }, []);
+
+  const startListening = useCallback((onResult: (text: string) => void, onError?: (error: string) => void) => {
+    if (!recognitionRef.current) {
+      onError?.('Speech recognition not supported');
+      return;
+    }
+
+    recognitionRef.current.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results[0][0].transcript;
+      onResult(transcript);
+      setIsListening(false);
+    };
+
+    recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
+      onError?.(event.error);
+      setIsListening(false);
+    };
+
+    recognitionRef.current.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current.start();
+    setIsListening(true);
+  }, []);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  }, []);
+
+  return { isListening, isSupported, startListening, stopListening };
+}
+
+function useVoiceOutput() {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isSupported, setIsSupported] = useState(false);
+
+  useEffect(() => {
+    setIsSupported('speechSynthesis' in window);
+  }, []);
+
+  const speak = useCallback((text: string) => {
+    if (!isSupported || typeof window === 'undefined') return;
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+    
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+
+    window.speechSynthesis.speak(utterance);
+  }, [isSupported]);
+
+  const stop = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+  }, []);
+
+  return { isSpeaking, isSupported, speak, stop };
+}
 
 // ============================================
 // MAIN COMPONENT
 // ============================================
 export default function OraklPage() {
-  // State
-  const [sessions, setSessions] = useState<Session[]>(MOCK_SESSIONS);
-  const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const router = useRouter();
+  
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  
+  // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [savedInsights, setSavedInsights] = useState<SavedInsight[]>(MOCK_INSIGHTS);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [clarityPanelOpen, setClarityPanelOpen] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [sessionId] = useState<string | null>(null);
+  
+  // Captcha state
+  const [showCaptcha, setShowCaptcha] = useState(false);
+  const [captchaVerified, setCaptchaVerified] = useState(false);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  
+  // Usage & plan state
+  const [plan, setPlan] = useState<Plan>('free');
+  const [usage, setUsage] = useState<Usage | null>(null);
   
   // Paywall state
-  const [isPro, setIsPro] = useState(false);
-  const [messagesUsedToday, setMessagesUsedToday] = useState(0);
   const [showPaywall, setShowPaywall] = useState(false);
+  const [paywallReason, setPaywallReason] = useState<'limit' | 'upgrade'>('limit');
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
-  const [isInputDisabled, setIsInputDisabled] = useState(false);
   
   // Toast state
   const [toasts, setToasts] = useState<Toast[]>([]);
   
+  // Voice
+  const voiceInput = useVoiceInput();
+  const voiceOutput = useVoiceOutput();
+  
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Initialize on mount
-  useEffect(() => {
-    setIsPro(checkIsPro());
-    setMessagesUsedToday(getMessagesUsedToday());
-    
-    // Check URL params for checkout result
-    const params = new URLSearchParams(window.location.search);
-    const checkoutResult = params.get('checkout');
-    
-    if (checkoutResult === 'success') {
-      // TODO: Verify with backend, for now just show success
-      addToast('Payment successful! Welcome to Orakl Pro.', 'success');
-      localStorage.setItem('orakl_is_pro', 'true');
-      setIsPro(true);
-      setIsInputDisabled(false);
-      // Clean URL
-      window.history.replaceState({}, '', '/orakl');
-    } else if (checkoutResult === 'cancelled') {
-      addToast('Checkout was cancelled.', 'info');
-      window.history.replaceState({}, '', '/orakl');
-    }
-  }, []);
-
-  // Auto-scroll to bottom when messages change
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // Toast helpers
+  // ============================================
+  // TOAST HELPERS
+  // ============================================
   const addToast = useCallback((message: string, type: Toast['type']) => {
     const id = Date.now().toString();
     setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 5000);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000);
   }, []);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Filter sessions based on search
-  const filteredSessions = sessions.filter(
-    (s) =>
-      s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.preview.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  // Remaining free messages
-  const remainingFreeMessages = Math.max(0, FREE_MESSAGE_LIMIT - messagesUsedToday);
-  const canSendMessage = isPro || remainingFreeMessages > 0;
-
-  // Create new session
-  const handleNewSession = () => {
-    setCurrentSession(null);
-    setMessages([]);
-    setInputValue('');
-  };
-
-  // Select existing session
-  const handleSelectSession = (session: Session) => {
-    setCurrentSession(session);
-    setMessages(session.messages);
-  };
-
-  // Handle Stripe checkout
-  const handleUpgrade = async () => {
-    setIsCheckoutLoading(true);
-    
+  // ============================================
+  // AUTH CHECK
+  // ============================================
+  const checkAuth = useCallback(async () => {
     try {
-      const response = await fetch('/api/stripe/checkout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ plan: 'orakl_pro' }),
-      });
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabaseUrl = process.env.NEXT_PUBLIC_ORAKL_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_ORAKL_SUPABASE_ANON_KEY;
       
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to create checkout session');
+      if (!supabaseUrl || !supabaseKey) {
+        setIsAuthenticated(false);
+        setIsLoadingAuth(false);
+        return;
       }
       
-      if (data.url) {
-        window.location.href = data.url;
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.access_token) {
+        setAuthToken(session.access_token);
+        setIsAuthenticated(true);
+        
+        // Fetch user's plan and usage
+        const { data: sub } = await supabase
+          .from('subscriptions')
+          .select('plan, status')
+          .single();
+        
+        if (sub && ['plus', 'pro'].includes(sub.plan) && sub.status !== 'cancelled') {
+          setPlan(sub.plan as Plan);
+        }
+        
+        const { data: usageData } = await supabase
+          .from('orakl_usage')
+          .select('*')
+          .single();
+        
+        if (usageData) {
+          setUsage({
+            used: usageData.replies_used,
+            cap: usageData.replies_cap,
+            remaining: usageData.replies_cap - usageData.replies_used,
+            windowEnd: usageData.window_end,
+          });
+        }
       } else {
-        throw new Error('No checkout URL received');
+        setIsAuthenticated(false);
       }
     } catch (error) {
-      console.error('Checkout error:', error);
-      addToast(
-        error instanceof Error ? error.message : 'Failed to start checkout. Please try again.',
-        'error'
-      );
-      setIsCheckoutLoading(false);
+      console.error('Auth check error:', error);
+      setIsAuthenticated(false);
+    } finally {
+      setIsLoadingAuth(false);
     }
-  };
+  }, []);
 
-  // Send message
-  const handleSendMessage = async (content: string) => {
-    if (!content.trim()) return;
+  // ============================================
+  // EFFECTS
+  // ============================================
+  useEffect(() => {
+    checkAuth();
     
-    // Check if user can send message
-    if (!isPro && messagesUsedToday >= FREE_MESSAGE_LIMIT) {
-      setShowPaywall(true);
-      return;
+    const params = new URLSearchParams(window.location.search);
+    const checkoutResult = params.get('checkout');
+    const checkoutPlan = params.get('plan');
+    
+    if (checkoutResult === 'success' && checkoutPlan) {
+      addToast(`Welcome to Orakl ${checkoutPlan.charAt(0).toUpperCase() + checkoutPlan.slice(1)}!`, 'success');
+      window.history.replaceState({}, '', '/orakl');
+    } else if (checkoutResult === 'cancelled') {
+      addToast('Checkout was cancelled', 'info');
+      window.history.replaceState({}, '', '/orakl');
     }
+  }, [checkAuth, addToast]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // ============================================
+  // CHAT HANDLERS
+  // ============================================
+  const sendMessageToAPI = useCallback(async (content: string, captchaToken?: string) => {
+    if (!authToken) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -526,480 +589,398 @@ export default function OraklPage() {
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
     setIsTyping(true);
-    
-    // Increment message count for free users
-    if (!isPro) {
-      const newCount = incrementMessagesUsed();
-      setMessagesUsedToday(newCount);
-      
-      // Check if this was the last free message
-      if (newCount >= FREE_MESSAGE_LIMIT) {
-        setIsInputDisabled(true);
-      }
-    }
 
-    // Simulate AI response (replace with real API call later)
-    setTimeout(() => {
+    try {
+      const response = await fetch('/api/orakl/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
+          sessionId,
+          captchaToken,
+          isFirstMessage: messages.length === 0,
+          authToken,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (data.error === 'quota_exceeded') {
+          setUsage(data.usage);
+          setPaywallReason('limit');
+          setShowPaywall(true);
+          setMessages((prev) => prev.filter(m => m.id !== userMessage.id));
+        } else {
+          throw new Error(data.error || 'Failed to send message');
+        }
+        return;
+      }
+
+      if (data.usage) {
+        setUsage(data.usage);
+      }
+
+      if (data.plan) {
+        setPlan(data.plan);
+      }
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: generateMockResponse(content),
+        content: data.message,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
+
+    } catch (error) {
+      console.error('Chat error:', error);
+      addToast(error instanceof Error ? error.message : 'Failed to send message', 'error');
+      setMessages((prev) => prev.filter(m => m.id !== userMessage.id));
+    } finally {
       setIsTyping(false);
+    }
+  }, [authToken, messages, sessionId, addToast]);
 
-      // Create or update session
-      if (!currentSession) {
-        const newSession: Session = {
-          id: Date.now().toString(),
-          title: content.slice(0, 40) + (content.length > 40 ? '...' : ''),
-          preview: content.slice(0, 60),
-          updatedAt: new Date(),
-          messages: [userMessage, assistantMessage],
-        };
-        setSessions((prev) => [newSession, ...prev]);
-        setCurrentSession(newSession);
-      }
-      
-      // Show paywall after response if limit reached
-      if (!isPro && messagesUsedToday + 1 >= FREE_MESSAGE_LIMIT) {
-        setTimeout(() => {
-          setShowPaywall(true);
-        }, 1000);
-      }
-    }, 1500);
-  };
+  const handleSendMessage = useCallback(async (content: string) => {
+    if (!content.trim() || !authToken) return;
 
-  // Handle quick tool click
-  const handleQuickTool = (prompt: string) => {
-    if (!canSendMessage && !isPro) {
-      setShowPaywall(true);
+    if (!captchaVerified && messages.length === 0) {
+      setPendingMessage(content);
+      setShowCaptcha(true);
       return;
     }
-    handleSendMessage(prompt);
-  };
 
-  // Handle starter chip click
-  const handleStarterChip = (prompt: string) => {
-    setInputValue(prompt);
-    inputRef.current?.focus();
-  };
+    await sendMessageToAPI(content);
+  }, [authToken, captchaVerified, messages.length, sendMessageToAPI]);
 
-  // Handle key press in textarea
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleCaptchaVerified = useCallback((token: string) => {
+    setCaptchaVerified(true);
+    setShowCaptcha(false);
+    
+    if (pendingMessage) {
+      sendMessageToAPI(pendingMessage, token);
+      setPendingMessage(null);
+    }
+  }, [pendingMessage, sendMessageToAPI]);
+
+  // ============================================
+  // STRIPE CHECKOUT
+  // ============================================
+  const handleUpgrade = useCallback(async (selectedPlan: 'plus' | 'pro') => {
+    if (!authToken) return;
+    
+    setIsCheckoutLoading(true);
+
+    try {
+      const response = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: selectedPlan, authToken }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to start checkout');
+      }
+
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (error) {
+      console.error('Checkout error:', error);
+      addToast(error instanceof Error ? error.message : 'Checkout failed', 'error');
+      setIsCheckoutLoading(false);
+    }
+  }, [authToken, addToast]);
+
+  // ============================================
+  // VOICE HANDLERS
+  // ============================================
+  const handleVoiceInput = useCallback(() => {
+    if (voiceInput.isListening) {
+      voiceInput.stopListening();
+    } else {
+      voiceInput.startListening(
+        (text) => setInputValue((prev) => prev + (prev ? ' ' : '') + text),
+        (error) => addToast(`Voice input error: ${error}`, 'error')
+      );
+    }
+  }, [voiceInput, addToast]);
+
+  const handleSpeakMessage = useCallback((content: string) => {
+    if (voiceOutput.isSpeaking) {
+      voiceOutput.stop();
+    } else {
+      const cleanText = content
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/---[\s\S]*$/, '')
+        .trim();
+      voiceOutput.speak(cleanText);
+    }
+  }, [voiceOutput]);
+
+  // ============================================
+  // MEMORY CLEAR
+  // ============================================
+  const handleClearMemory = useCallback(async () => {
+    if (!confirm('Clear all your Orakl memory? This cannot be undone.')) return;
+
+    try {
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabaseUrl = process.env.NEXT_PUBLIC_ORAKL_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_ORAKL_SUPABASE_ANON_KEY;
+      
+      if (!supabaseUrl || !supabaseKey) return;
+      
+      const supabase = createClient(supabaseUrl, supabaseKey);
+
+      await supabase.from('orakl_user_profile').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await supabase.from('orakl_insights').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      
+      addToast('Memory cleared', 'success');
+    } catch {
+      addToast('Failed to clear memory', 'error');
+    }
+  }, [addToast]);
+
+  // ============================================
+  // KEY HANDLERS
+  // ============================================
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (isInputDisabled && !isPro) {
-        setShowPaywall(true);
-      } else {
-        handleSendMessage(inputValue);
-      }
-    }
-  };
-
-  // Handle send button click
-  const handleSendClick = () => {
-    if (isInputDisabled && !isPro) {
-      setShowPaywall(true);
-    } else {
       handleSendMessage(inputValue);
     }
-  };
+  }, [handleSendMessage, inputValue]);
 
-  // Format date for display
-  const formatDate = (date: Date) => {
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    
-    if (days === 0) return 'Today';
-    if (days === 1) return 'Yesterday';
-    if (days < 7) return `${days} days ago`;
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
+  // ============================================
+  // RENDER: Loading
+  // ============================================
+  if (isLoadingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-slate-600 border-t-teal-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
 
+  // ============================================
+  // RENDER: Login required
+  // ============================================
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
+        <div className="text-center max-w-md">
+          <OraklLogo className="w-16 h-16 mx-auto mb-6" />
+          <h1 className="text-2xl font-semibold text-slate-100 mb-2">Sign in to Orakl</h1>
+          <p className="text-slate-400 mb-6">
+            Your private clarity companion for untangling thoughts, relationships, and decisions.
+          </p>
+          <button
+            onClick={() => router.push('/orakl/login')}
+            className="px-6 py-3 bg-teal-600 hover:bg-teal-500 text-white font-medium rounded-xl transition-colors"
+          >
+            Sign In
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================
+  // RENDER: Main chat UI
+  // ============================================
   return (
     <>
-      <div className="h-screen flex bg-slate-950 text-slate-100 overflow-hidden">
-        {/* ============================================ */}
-        {/* LEFT SIDEBAR - Sessions */}
-        {/* ============================================ */}
-        <aside
-          className={`${
-            sidebarOpen ? 'w-72' : 'w-0'
-          } transition-all duration-300 bg-slate-900/50 border-r border-slate-800 flex flex-col overflow-hidden`}
-        >
-          {/* Sidebar Header */}
-          <div className="p-4 border-b border-slate-800">
-            <div className="flex items-center gap-3 mb-4">
-              <OraklLogo className="w-8 h-8" />
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-semibold tracking-tight">Orakl</span>
-                {isPro && (
-                  <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-teal-500/20 text-teal-400 rounded">
-                    PRO
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={handleNewSession}
-              className="w-full py-2.5 px-4 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-400 text-sm font-medium transition-colors flex items-center justify-center gap-2"
-            >
-              <span className="text-lg">+</span>
-              New Session
-            </button>
-          </div>
+      <Script
+        src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad"
+        async
+        defer
+      />
 
-          {/* Search */}
-          <div className="p-3">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search sessions..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full py-2 px-3 pl-9 bg-slate-800/50 border border-slate-700 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-teal-500/50 focus:ring-1 focus:ring-teal-500/20"
-              />
-              <svg
-                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-            </div>
-          </div>
-
-          {/* Sessions List */}
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {filteredSessions.map((session) => (
-              <button
-                key={session.id}
-                onClick={() => handleSelectSession(session)}
-                className={`w-full text-left p-3 rounded-lg transition-colors ${
-                  currentSession?.id === session.id
-                    ? 'bg-teal-600/20 border border-teal-500/30'
-                    : 'hover:bg-slate-800/50 border border-transparent'
-                }`}
-              >
-                <div className="text-sm font-medium text-slate-200 truncate">
-                  {session.title}
-                </div>
-                <div className="text-xs text-slate-500 truncate mt-1">
-                  {session.preview}
-                </div>
-                <div className="text-xs text-slate-600 mt-1">
-                  {formatDate(session.updatedAt)}
-                </div>
-              </button>
-            ))}
-          </div>
-          
-          {/* Free tier indicator */}
-          {!isPro && (
-            <div className="p-4 border-t border-slate-800">
-              <div className="text-xs text-slate-500 mb-2">
-                Free messages today
-              </div>
-              <div className="flex gap-1">
-                {[...Array(FREE_MESSAGE_LIMIT)].map((_, i) => (
-                  <div
-                    key={i}
-                    className={`flex-1 h-1.5 rounded-full ${
-                      i < messagesUsedToday ? 'bg-teal-500' : 'bg-slate-700'
-                    }`}
-                  />
-                ))}
-              </div>
-              <div className="text-xs text-slate-600 mt-2">
-                {remainingFreeMessages} of {FREE_MESSAGE_LIMIT} remaining
-              </div>
-            </div>
-          )}
-        </aside>
-
-        {/* ============================================ */}
-        {/* MAIN CHAT AREA */}
-        {/* ============================================ */}
-        <main className="flex-1 flex flex-col min-w-0">
-          {/* Header */}
-          <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/30">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
-              <span className="text-sm text-slate-400">
-                {currentSession ? currentSession.title : 'New Session'}
+      <div className="h-screen flex flex-col bg-slate-950 text-slate-100">
+        {/* Header */}
+        <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/50">
+          <div className="flex items-center gap-3">
+            <OraklLogo className="w-7 h-7" />
+            <span className="font-semibold tracking-tight">Orakl</span>
+            {plan !== 'free' && (
+              <span className="text-xs bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded uppercase">
+                {plan}
               </span>
-            </div>
-            <button
-              onClick={() => setClarityPanelOpen(!clarityPanelOpen)}
-              className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-slate-200"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-            </button>
-          </header>
-
-          {/* Chat Content */}
-          <div className="flex-1 overflow-y-auto">
-            {messages.length === 0 ? (
-              /* Empty State */
-              <div className="h-full flex flex-col items-center justify-center p-6 text-center">
-                <OraklHeroSVG />
-                <h2 className="text-2xl font-semibold text-slate-200 mb-2">
-                  What's the loop you're stuck in?
-                </h2>
-                <p className="text-slate-400 text-sm max-w-md mb-6">
-                  Break rumination cycles, clarify conflict, connect patterns, and find your next step.
-                </p>
-                <div className="flex flex-wrap justify-center gap-2 mb-8">
-                  {STARTER_CHIPS.map((chip) => (
-                    <button
-                      key={chip.id}
-                      onClick={() => handleStarterChip(chip.prompt)}
-                      className="px-4 py-2 bg-slate-800/50 hover:bg-slate-800 border border-slate-700 hover:border-teal-500/30 rounded-full text-sm text-slate-300 hover:text-teal-400 transition-colors"
-                    >
-                      {chip.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-xs text-slate-600">
-                  Not medical advice. For personal clarity and reflection only.
-                </p>
-              </div>
-            ) : (
-              /* Messages */
-              <div className="max-w-3xl mx-auto p-4 space-y-6">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                        message.role === 'user'
-                          ? 'bg-teal-600/20 border border-teal-500/30 text-slate-200'
-                          : 'bg-slate-800/50 border border-slate-700 text-slate-300'
-                      }`}
-                    >
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                      <p className="text-xs text-slate-500 mt-2">
-                        {message.timestamp.toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-                {isTyping && (
-                  <div className="flex justify-start">
-                    <div className="bg-slate-800/50 border border-slate-700 rounded-2xl px-4 py-3">
-                      <div className="flex gap-1">
-                        <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
             )}
           </div>
-
-          {/* Input Area */}
-          <div className="border-t border-slate-800 p-4 bg-slate-900/30">
-            <div className="max-w-3xl mx-auto">
-              <div className="relative">
-                <textarea
-                  ref={inputRef}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    isInputDisabled && !isPro
-                      ? 'Upgrade to continue...'
-                      : "What's on your mind?"
-                  }
-                  rows={1}
-                  disabled={isTyping}
-                  className={`w-full py-3 px-4 pr-12 bg-slate-800/50 border rounded-xl text-sm text-slate-200 placeholder-slate-500 resize-none focus:outline-none transition-colors ${
-                    isInputDisabled && !isPro
-                      ? 'border-slate-700/50 cursor-not-allowed opacity-60'
-                      : 'border-slate-700 focus:border-teal-500/50 focus:ring-1 focus:ring-teal-500/20'
-                  }`}
-                  style={{ minHeight: '48px', maxHeight: '120px' }}
-                />
+          
+          <div className="flex items-center gap-4">
+            {usage && (
+              <div className="text-xs text-slate-500">
+                {usage.remaining} / {usage.cap} left
+              </div>
+            )}
+            
+            <div className="relative group">
+              <button className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                </svg>
+              </button>
+              <div className="absolute right-0 top-full mt-1 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
                 <button
-                  onClick={handleSendClick}
-                  disabled={!inputValue.trim() || isTyping}
-                  className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg transition-colors ${
-                    isInputDisabled && !isPro
-                      ? 'bg-teal-600/50 cursor-pointer'
-                      : 'bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 disabled:cursor-not-allowed'
-                  }`}
+                  onClick={() => { setPaywallReason('upgrade'); setShowPaywall(true); }}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-slate-700 rounded-t-lg"
                 >
-                  <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                  </svg>
+                  Upgrade plan
+                </button>
+                <button
+                  onClick={handleClearMemory}
+                  className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-slate-700 rounded-b-lg"
+                >
+                  Clear my memory
                 </button>
               </div>
-              <p className="text-xs text-slate-600 text-center mt-2">
-                {isInputDisabled && !isPro ? (
-                  <button
-                    onClick={() => setShowPaywall(true)}
-                    className="text-teal-400 hover:text-teal-300"
-                  >
-                    Upgrade to unlock unlimited messages →
-                  </button>
-                ) : (
-                  'Press Enter to send • Shift+Enter for new line'
-                )}
+            </div>
+          </div>
+        </header>
+
+        {/* Chat area */}
+        <div className="flex-1 overflow-y-auto">
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-2xl mx-auto">
+              <div className="w-20 h-20 mb-6 rounded-full bg-teal-500/10 border border-teal-500/20 flex items-center justify-center">
+                <OraklLogo className="w-10 h-10" />
+              </div>
+              
+              <p className="text-xl text-slate-200 mb-4 leading-relaxed">
+                {WELCOME_MESSAGE}
+              </p>
+              
+              <p className="text-sm text-slate-500 max-w-lg">
+                {WELCOME_HINT}
               </p>
             </div>
-          </div>
-        </main>
-
-        {/* ============================================ */}
-        {/* RIGHT PANEL - Clarity Tools */}
-        {/* ============================================ */}
-        <aside
-          className={`${
-            clarityPanelOpen ? 'w-72' : 'w-0'
-          } transition-all duration-300 bg-slate-900/50 border-l border-slate-800 flex flex-col overflow-hidden`}
-        >
-          {/* Quick Tools */}
-          <div className="p-4 border-b border-slate-800">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-              Quick Tools
-            </h3>
-            <div className="grid grid-cols-2 gap-2">
-              {QUICK_TOOLS.map((tool) => (
-                <button
-                  key={tool.id}
-                  onClick={() => handleQuickTool(tool.prompt)}
-                  className="p-2.5 bg-slate-800/50 hover:bg-slate-800 border border-slate-700 hover:border-teal-500/30 rounded-lg text-xs text-slate-300 hover:text-teal-400 transition-colors text-left"
-                >
-                  <span className="block text-base mb-1">{tool.icon}</span>
-                  <span className="block leading-tight">{tool.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Saved Insights */}
-          <div className="flex-1 overflow-y-auto p-4">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-              Saved Insights
-            </h3>
-            <div className="space-y-3">
-              {savedInsights.map((insight) => (
+          ) : (
+            <div className="max-w-3xl mx-auto p-4 space-y-6">
+              {messages.map((message) => (
                 <div
-                  key={insight.id}
-                  className="p-3 bg-slate-800/30 border border-slate-700/50 rounded-lg"
+                  key={message.id}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    "{insight.content}"
-                  </p>
-                  <p className="text-xs text-slate-600 mt-2">
-                    {formatDate(insight.createdAt)}
-                  </p>
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+                      message.role === 'user'
+                        ? 'bg-teal-600/20 border border-teal-500/30'
+                        : 'bg-slate-800/50 border border-slate-700'
+                    }`}
+                  >
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                    
+                    {message.role === 'assistant' && voiceOutput.isSupported && (plan === 'plus' || plan === 'pro') && (
+                      <button
+                        onClick={() => handleSpeakMessage(message.content)}
+                        className="mt-2 text-xs text-slate-500 hover:text-teal-400 flex items-center gap-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                        </svg>
+                        {voiceOutput.isSpeaking ? 'Stop' : 'Listen'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
-              {savedInsights.length === 0 && (
-                <p className="text-xs text-slate-600 text-center py-4">
-                  Insights you save will appear here
-                </p>
+              
+              {isTyping && (
+                <div className="flex justify-start">
+                  <div className="bg-slate-800/50 border border-slate-700 rounded-2xl px-4 py-3">
+                    <div className="flex gap-1">
+                      <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  </div>
+                </div>
               )}
+              
+              <div ref={messagesEndRef} />
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* Disclaimer */}
-          <div className="p-4 border-t border-slate-800">
-            <p className="text-xs text-slate-600 text-center">
-              For personal clarity only.<br />Not medical or therapeutic advice.
+        {/* Input area */}
+        <div className="border-t border-slate-800 p-4 bg-slate-900/30">
+          <div className="max-w-3xl mx-auto">
+            <div className="relative flex items-end gap-2">
+              {voiceInput.isSupported && (plan === 'plus' || plan === 'pro') && (
+                <button
+                  onClick={handleVoiceInput}
+                  className={`p-3 rounded-xl transition-colors flex-shrink-0 ${
+                    voiceInput.isListening
+                      ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border border-slate-700'
+                  }`}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                </button>
+              )}
+              
+              <textarea
+                ref={inputRef}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="What's on your mind?"
+                rows={1}
+                disabled={isTyping}
+                className="flex-1 py-3 px-4 bg-slate-800/50 border border-slate-700 rounded-xl text-sm resize-none focus:outline-none focus:border-teal-500/50 focus:ring-1 focus:ring-teal-500/20 disabled:opacity-50"
+                style={{ minHeight: '48px', maxHeight: '120px' }}
+              />
+              
+              <button
+                onClick={() => handleSendMessage(inputValue)}
+                disabled={!inputValue.trim() || isTyping}
+                className="p-3 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl transition-colors flex-shrink-0"
+              >
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              </button>
+            </div>
+            
+            <p className="text-xs text-slate-600 text-center mt-2">
+              Enter to send • Shift+Enter for new line
             </p>
           </div>
-        </aside>
+        </div>
+
+        {/* Disclaimer */}
+        <div className="text-center py-2 text-xs text-slate-600 border-t border-slate-800/50">
+          Not therapy, medical, or legal advice. For personal reflection only.
+        </div>
       </div>
-      
-      {/* Paywall Modal */}
+
+      {/* Modals */}
+      <CaptchaModal
+        isOpen={showCaptcha}
+        onVerified={handleCaptchaVerified}
+        onClose={() => { setShowCaptcha(false); setPendingMessage(null); }}
+      />
+
       <PaywallModal
         isOpen={showPaywall}
         onClose={() => setShowPaywall(false)}
         onUpgrade={handleUpgrade}
         isLoading={isCheckoutLoading}
+        currentPlan={plan}
+        usage={usage || undefined}
+        reason={paywallReason}
       />
-      
-      {/* Toasts */}
+
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-      
-      {/* Animation styles */}
-      <style jsx global>{`
-        @keyframes slide-up {
-          from {
-            opacity: 0;
-            transform: translateY(10px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        .animate-slide-up {
-          animation: slide-up 0.2s ease-out;
-        }
-      `}</style>
     </>
   );
-}
-
-// ============================================
-// MOCK RESPONSE GENERATOR
-// ============================================
-function generateMockResponse(userMessage: string): string {
-  const lowerMessage = userMessage.toLowerCase();
-  
-  if (lowerMessage.includes('loop') || lowerMessage.includes('stuck')) {
-    return `Let's break this loop down. When you notice yourself cycling through these thoughts, what's the core fear underneath? Often loops protect us from facing something—a decision, a truth, or an emotion we're not ready to feel.\n\nTry this: Complete this sentence without thinking too hard: "If I stop thinking about this, I'm afraid that..."\n\nWhat comes up?`;
-  }
-  
-  if (lowerMessage.includes('boundary') || lowerMessage.includes('boundaries')) {
-    return `Good—you're recognizing you need a boundary here. Let's build it.\n\nFirst, get clear on the behavior that's crossing your line. Not interpretations, just the observable facts.\n\nThen we'll work on:\n1. What you need (the boundary)\n2. How to communicate it\n3. What happens if it's not respected\n\nWhat's the specific behavior you need to address?`;
-  }
-  
-  if (lowerMessage.includes('family') || lowerMessage.includes('mother') || lowerMessage.includes('father')) {
-    return `Family patterns run deep. Before we dive in, I want to acknowledge: the most painful dynamics are often with the people who were supposed to make us feel safest.\n\nLet's map this out:\n- What role did you play in your family growing up?\n- What role are you being pulled into now?\n- What role do you actually want?\n\nThese are usually different. Which question feels most charged for you right now?`;
-  }
-  
-  if (lowerMessage.includes('work') || lowerMessage.includes('manager') || lowerMessage.includes('boss') || lowerMessage.includes('colleague')) {
-    return `Work dynamics can mirror family dynamics in surprising ways. Let's look at what's actually happening.\n\nFacts first (observable behavior, no interpretation):\n- What specifically happened?\n- When and where?\n- Who was involved?\n\nThen we'll separate facts from the story you're telling yourself about what it means.\n\nStart with the facts—what occurred?`;
-  }
-  
-  if (lowerMessage.includes('message') || lowerMessage.includes('draft') || lowerMessage.includes('say')) {
-    return `I'll help you draft this. To create versions that land well, I need to understand:\n\n1. Who is this going to?\n2. What's the core thing you need them to understand?\n3. What outcome are you hoping for?\n4. What's your relationship with this person like right now?\n\nOnce I know this, I'll give you three versions:\n- Calm (soft, relationship-preserving)\n- Firm (clear, direct, no ambiguity)\n- Diplomatic (professional, strategic)\n\nWhat are we working with?`;
-  }
-  
-  if (lowerMessage.includes('steps') || lowerMessage.includes('next') || lowerMessage.includes('do')) {
-    return `Let's get you unstuck with concrete next steps.\n\nBased on what you've shared, here's what I'd suggest for the next 24-72 hours:\n\n**Next 24 hours:**\n→ One small action that moves the needle (even 5 minutes counts)\n\n**Next 48 hours:**\n→ One conversation or boundary that needs setting\n\n**Next 72 hours:**\n→ One self-care anchor (something that grounds you)\n\nBut first—what's the actual situation? I want to tailor these to what you're dealing with.`;
-  }
-  
-  // Default response
-  return `I hear you. Let's slow down and look at this clearly.\n\nWhat I'm noticing in what you've shared: there's something here that needs attention. Before we problem-solve, let's make sure we understand what's actually happening.\n\nCan you tell me more about what triggered this? What happened right before you started feeling this way?`;
 }
