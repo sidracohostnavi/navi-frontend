@@ -23,11 +23,11 @@ export default function OraklLoginPage() {
 
     try {
       const { error: googleError } = await supabase.auth.signInWithOAuth({
-  provider: 'google',
-  options: {
-    redirectTo: `${window.location.origin}/auth/callback?next=/orakl`,
-  },
-});
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
 
       if (googleError) throw googleError;
     } catch (err) {

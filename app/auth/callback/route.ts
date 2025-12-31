@@ -7,7 +7,6 @@ import type { NextRequest } from 'next/server';
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
-  const next = requestUrl.searchParams.get('next') ?? '/orakl';
 
   if (code) {
     const cookieStore = await cookies();
@@ -32,10 +31,11 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     
     if (!error) {
-      return NextResponse.redirect(new URL(next, request.url));
+      // Successfully logged in, redirect to /orakl
+      return NextResponse.redirect(new URL('/orakl', request.url));
     }
   }
 
-  // Return to login if something went wrong
+  // Something went wrong, go back to login
   return NextResponse.redirect(new URL('/orakl/login', request.url));
 }
