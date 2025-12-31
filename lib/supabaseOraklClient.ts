@@ -1,12 +1,20 @@
-"use client";
+// lib/supabaseOraklClient.ts
+import { createBrowserClient } from '@supabase/ssr';
 
-import { createClient } from "@supabase/supabase-js";
-
-const url = process.env.NEXT_PUBLIC_ORAKL_SUPABASE_URL;
-const anon = process.env.NEXT_PUBLIC_ORAKL_SUPABASE_ANON_KEY;
-
-if (!url || !anon) {
-  throw new Error("Orakl Supabase env vars missing: NEXT_PUBLIC_ORAKL_SUPABASE_URL / NEXT_PUBLIC_ORAKL_SUPABASE_ANON_KEY");
+// Browser client - use this in Client Components ('use client')
+export function createOraklBrowserClient() {
+  return createBrowserClient(
+    process.env.NEXT_PUBLIC_ORAKL_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_ORAKL_SUPABASE_ANON_KEY!
+  );
 }
 
-export const supabaseOrakl = createClient(url, anon);
+// For convenience, export a singleton for client components
+let browserClient: ReturnType<typeof createBrowserClient> | null = null;
+
+export function getOraklBrowserClient() {
+  if (!browserClient) {
+    browserClient = createOraklBrowserClient();
+  }
+  return browserClient;
+}

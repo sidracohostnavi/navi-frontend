@@ -1,8 +1,18 @@
-export default function OraklPage() {
-  return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>Navi ORAKL</h1>
-      <p>If you can see this page, you are logged in (or middleware allowed you through).</p>
-    </main>
-  );
+// app/orakl/page.tsx
+import { redirect } from 'next/navigation';
+import { createOraklServerClient } from '@/lib/supabaseOraklServer';
+import OraklDashboard from '@/app/orakl/OraklDashboard';
+
+export default async function OraklPage() {
+  const supabase = await createOraklServerClient();
+  
+  const { data: { user }, error } = await supabase.auth.getUser();
+
+  // If not logged in, redirect to login
+  if (error || !user) {
+    redirect('/orakl/login');
+  }
+
+  // User is authenticated, render the dashboard
+  return <OraklDashboard user={user} />;
 }
