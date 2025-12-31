@@ -15,6 +15,14 @@ interface Message {
   timestamp: Date;
 }
 
+interface Session {
+  id: string;
+  title: string;
+  preview: string;
+  messages: Message[];
+  updatedAt: Date;
+}
+
 interface Usage {
   used: number;
   cap: number;
@@ -33,12 +41,9 @@ type Plan = 'free' | 'plus' | 'pro';
 // ============================================
 // CONSTANTS
 // ============================================
-const WELCOME_MESSAGE = `What are we untangling today — a thought loop, a relationship dynamic, or a decision you can't land on?`;
-
-const WELCOME_HINT = `[To be accurate: what happened, who's involved, what you tried, what you fear might be true, and what outcome you want. More context = better help.]`;
-
 const FREE_MESSAGE_LIMIT = 3;
 const STORAGE_KEY = 'orakl_usage';
+const SESSIONS_KEY = 'orakl_sessions';
 
 // ============================================
 // HELPER: Get usage from localStorage (MVP)
@@ -56,7 +61,6 @@ function getStoredUsage(): Usage {
       const now = new Date();
       const daysPassed = Math.floor((now.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
       
-      // Reset if 30 days passed
       if (daysPassed >= 30) {
         const newUsage = { used: 0, cap: data.cap || FREE_MESSAGE_LIMIT, remaining: data.cap || FREE_MESSAGE_LIMIT, resetDays: 30 };
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...newUsage, windowStart: now.toISOString() }));
@@ -74,7 +78,6 @@ function getStoredUsage(): Usage {
     console.error('Error reading usage:', e);
   }
   
-  // Initialize new usage
   const newUsage = { used: 0, cap: FREE_MESSAGE_LIMIT, remaining: FREE_MESSAGE_LIMIT, resetDays: 30 };
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...newUsage, windowStart: new Date().toISOString() }));
   return newUsage;
@@ -108,7 +111,70 @@ function incrementUsage(): Usage {
 }
 
 // ============================================
-// MOCK AI RESPONSE (replace with real API later)
+// HELPER: Session storage
+// ============================================
+function getStoredSessions(): Session[] {
+  if (typeof window === 'undefined') return [];
+  
+  try {
+    const stored = localStorage.getItem(SESSIONS_KEY);
+    if (stored) {
+      const sessions = JSON.parse(stored);
+      return sessions.map((s: Session) => ({
+        ...s,
+        updatedAt: new Date(s.updatedAt),
+        messages: s.messages.map((m: Message) => ({
+          ...m,
+          timestamp: new Date(m.timestamp),
+        })),
+      }));
+    }
+  } catch (e) {
+    console.error('Error reading sessions:', e);
+  }
+  return [];
+}
+
+function saveSession(session: Session, allSessions: Session[]): Session[] {
+  if (typeof window === 'undefined') return allSessions;
+  
+  try {
+    const existingIndex = allSessions.findIndex(s => s.id === session.id);
+    let updatedSessions: Session[];
+    
+    if (existingIndex >= 0) {
+      updatedSessions = [...allSessions];
+      updatedSessions[existingIndex] = session;
+    } else {
+      updatedSessions = [session, ...allSessions];
+    }
+    
+    // Keep only last 50 sessions
+    updatedSessions = updatedSessions.slice(0, 50);
+    
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
+    return updatedSessions;
+  } catch (e) {
+    console.error('Error saving session:', e);
+    return allSessions;
+  }
+}
+
+function deleteSession(sessionId: string, allSessions: Session[]): Session[] {
+  if (typeof window === 'undefined') return allSessions;
+  
+  try {
+    const updatedSessions = allSessions.filter(s => s.id !== sessionId);
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
+    return updatedSessions;
+  } catch (e) {
+    console.error('Error deleting session:', e);
+    return allSessions;
+  }
+}
+
+// ============================================
+// MOCK AI RESPONSE
 // ============================================
 function generateMockResponse(userMessage: string): string {
   const lowerMessage = userMessage.toLowerCase();
@@ -196,7 +262,6 @@ If you want: reality check / next 3 steps / a pros-cons breakdown — tell me wh
 *Not therapy, medical, or legal advice. For personal reflection only.*`;
   }
   
-  // Default response for thin context
   return `I want to help you untangle this, but I need more to work with.
 
 **Tell me:**
@@ -354,6 +419,20 @@ function OraklLogo({ className = '' }: { className?: string }) {
 }
 
 // ============================================
+// FORMAT DATE HELPER
+// ============================================
+function formatDate(date: Date): string {
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days} days ago`;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// ============================================
 // MAIN COMPONENT
 // ============================================
 export default function OraklPage() {
@@ -363,6 +442,12 @@ export default function OraklPage() {
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userFirstName, setUserFirstName] = useState<string | null>(null);
+  
+  // Session state
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   
   // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -412,7 +497,14 @@ export default function OraklPage() {
         
         setIsAuthenticated(true);
         setUserEmail(user.email || null);
+        
+        // Extract first name from user metadata
+        const fullName = user.user_metadata?.full_name || user.user_metadata?.name || '';
+        const firstName = fullName.split(' ')[0] || null;
+        setUserFirstName(firstName);
+        
         setUsage(getStoredUsage());
+        setSessions(getStoredSessions());
       } catch (err) {
         console.error('Auth error:', err);
         setIsAuthenticated(false);
@@ -440,6 +532,33 @@ export default function OraklPage() {
   }, [messages]);
 
   // ============================================
+  // SESSION HANDLERS
+  // ============================================
+  const handleNewSession = useCallback(() => {
+    setCurrentSession(null);
+    setMessages([]);
+    setInputValue('');
+  }, []);
+
+  const handleSelectSession = useCallback((session: Session) => {
+    setCurrentSession(session);
+    setMessages(session.messages);
+  }, []);
+
+  const handleDeleteSession = useCallback((sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updatedSessions = deleteSession(sessionId, sessions);
+    setSessions(updatedSessions);
+    
+    if (currentSession?.id === sessionId) {
+      setCurrentSession(null);
+      setMessages([]);
+    }
+    
+    addToast('Session deleted', 'info');
+  }, [sessions, currentSession, addToast]);
+
+  // ============================================
   // SEND MESSAGE
   // ============================================
   const handleSendMessage = useCallback(async (content: string) => {
@@ -458,11 +577,12 @@ export default function OraklPage() {
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
     setInputValue('');
     setIsTyping(true);
 
-    // Simulate AI response (replace with real API call later)
+    // Simulate AI response
     setTimeout(() => {
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -471,19 +591,38 @@ export default function OraklPage() {
         timestamp: new Date(),
       };
       
-      setMessages((prev) => [...prev, assistantMessage]);
+      const finalMessages = [...updatedMessages, assistantMessage];
+      setMessages(finalMessages);
       setIsTyping(false);
       
       // Update usage
       const newUsage = incrementUsage();
       setUsage(newUsage);
       
+      // Save or update session
+      const sessionTitle = content.slice(0, 40) + (content.length > 40 ? '...' : '');
+      const sessionPreview = content.slice(0, 60);
+      
+      const session: Session = currentSession 
+        ? { ...currentSession, messages: finalMessages, updatedAt: new Date() }
+        : {
+            id: Date.now().toString(),
+            title: sessionTitle,
+            preview: sessionPreview,
+            messages: finalMessages,
+            updatedAt: new Date(),
+          };
+      
+      const updatedSessions = saveSession(session, sessions);
+      setSessions(updatedSessions);
+      setCurrentSession(session);
+      
       // Show paywall if limit reached
       if (newUsage.remaining <= 0) {
         setTimeout(() => setShowPaywall(true), 500);
       }
     }, 1500);
-  }, [usage.remaining]);
+  }, [usage.remaining, messages, currentSession, sessions]);
 
   // ============================================
   // STRIPE CHECKOUT
@@ -576,23 +715,117 @@ export default function OraklPage() {
   // ============================================
   return (
     <>
-      <div className="h-screen flex flex-col bg-slate-950 text-slate-100">
-        {/* Header */}
-        <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/50">
-          <div className="flex items-center gap-3">
-            <OraklLogo className="w-7 h-7" />
-            <span className="font-semibold tracking-tight">Orakl</span>
-            {plan !== 'free' && (
-              <span className="text-xs bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded uppercase">
-                {plan}
-              </span>
+      <div className="h-screen flex bg-slate-950 text-slate-100">
+        {/* ============================================ */}
+        {/* LEFT SIDEBAR - Sessions */}
+        {/* ============================================ */}
+        <aside
+          className={`${
+            sidebarOpen ? 'w-72' : 'w-0'
+          } transition-all duration-300 bg-slate-900/50 border-r border-slate-800 flex flex-col overflow-hidden flex-shrink-0`}
+        >
+          {/* Sidebar Header */}
+          <div className="p-4 border-b border-slate-800">
+            <div className="flex items-center gap-3 mb-4">
+              <OraklLogo className="w-8 h-8" />
+              <span className="text-lg font-semibold tracking-tight">Orakl</span>
+              {plan !== 'free' && (
+                <span className="text-xs bg-teal-500/20 text-teal-400 px-2 py-0.5 rounded uppercase">
+                  {plan}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={handleNewSession}
+              className="w-full py-2.5 px-4 bg-teal-600/20 hover:bg-teal-600/30 border border-teal-500/30 rounded-lg text-teal-400 text-sm font-medium transition-colors flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              New Session
+            </button>
+          </div>
+
+          {/* Sessions List */}
+          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+            {sessions.length === 0 ? (
+              <p className="text-xs text-slate-600 text-center py-4">
+                No sessions yet
+              </p>
+            ) : (
+              sessions.map((session) => (
+                <div
+                  key={session.id}
+                  onClick={() => handleSelectSession(session)}
+                  className={`group w-full text-left p-3 rounded-lg transition-colors cursor-pointer ${
+                    currentSession?.id === session.id
+                      ? 'bg-teal-600/20 border border-teal-500/30'
+                      : 'hover:bg-slate-800/50 border border-transparent'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-200 truncate">
+                        {session.title}
+                      </div>
+                      <div className="text-xs text-slate-500 truncate mt-1">
+                        {session.preview}
+                      </div>
+                      <div className="text-xs text-slate-600 mt-1">
+                        {formatDate(session.updatedAt)}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => handleDeleteSession(session.id, e)}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-slate-700 rounded transition-all"
+                    >
+                      <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))
             )}
           </div>
-          
-          <div className="flex items-center gap-4">
-            {/* Usage indicator */}
-            <div className="text-xs text-slate-500">
-              {usage.remaining} / {usage.cap} left
+
+          {/* Usage indicator */}
+          <div className="p-4 border-t border-slate-800">
+            <div className="text-xs text-slate-500 mb-2">Messages this month</div>
+            <div className="flex gap-1">
+              {[...Array(usage.cap)].map((_, i) => (
+                <div
+                  key={i}
+                  className={`flex-1 h-1.5 rounded-full ${
+                    i < usage.used ? 'bg-teal-500' : 'bg-slate-700'
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="text-xs text-slate-600 mt-2">
+              {usage.remaining} of {usage.cap} remaining
+            </div>
+          </div>
+        </aside>
+
+        {/* ============================================ */}
+        {/* MAIN CHAT AREA */}
+        {/* ============================================ */}
+        <main className="flex-1 flex flex-col min-w-0">
+          {/* Header */}
+          <header className="h-14 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/30">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <span className="text-sm text-slate-400">
+                {currentSession ? currentSession.title : 'New Session'}
+              </span>
             </div>
             
             {/* User menu */}
@@ -620,98 +853,98 @@ export default function OraklPage() {
                 </button>
               </div>
             </div>
-          </div>
-        </header>
+          </header>
 
-        {/* Chat area */}
-        <div className="flex-1 overflow-y-auto">
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-2xl mx-auto">
-              <div className="w-20 h-20 mb-6 rounded-full bg-teal-500/10 border border-teal-500/20 flex items-center justify-center">
-                <OraklLogo className="w-10 h-10" />
-              </div>
-              
-              <p className="text-xl text-slate-200 mb-4 leading-relaxed">
-                {WELCOME_MESSAGE}
-              </p>
-              
-              <p className="text-sm text-slate-500 max-w-lg">
-                {WELCOME_HINT}
-              </p>
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto p-4 space-y-6">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                      message.role === 'user'
-                        ? 'bg-teal-600/20 border border-teal-500/30'
-                        : 'bg-slate-800/50 border border-slate-700'
-                    }`}
-                  >
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-                  </div>
+          {/* Chat area */}
+          <div className="flex-1 overflow-y-auto">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center p-6 text-center max-w-2xl mx-auto">
+                <div className="w-20 h-20 mb-6 rounded-full bg-teal-500/10 border border-teal-500/20 flex items-center justify-center">
+                  <OraklLogo className="w-10 h-10" />
                 </div>
-              ))}
-              
-              {isTyping && (
-                <div className="flex justify-start">
-                  <div className="bg-slate-800/50 border border-slate-700 rounded-2xl px-4 py-3">
-                    <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                
+                <p className="text-xl text-slate-200 mb-4 leading-relaxed">
+                  {userFirstName ? `Hey ${userFirstName}, what` : 'What'} are we untangling today — a thought loop, a relationship dynamic, or a decision you can&apos;t land on?
+                </p>
+                
+                <p className="text-sm text-slate-500 max-w-lg">
+                  [To be accurate: what happened, who&apos;s involved, what you tried, what you fear might be true, and what outcome you want. More context = better help.]
+                </p>
+              </div>
+            ) : (
+              <div className="max-w-3xl mx-auto p-4 space-y-6">
+                {messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[85%] rounded-2xl px-4 py-3 ${
+                        message.role === 'user'
+                          ? 'bg-teal-600/20 border border-teal-500/30'
+                          : 'bg-slate-800/50 border border-slate-700'
+                      }`}
+                    >
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                     </div>
                   </div>
-                </div>
-              )}
-              
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
-
-        {/* Input area */}
-        <div className="border-t border-slate-800 p-4 bg-slate-900/30">
-          <div className="max-w-3xl mx-auto">
-            <div className="relative flex items-end gap-2">
-              <textarea
-                ref={inputRef}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="What's on your mind?"
-                rows={1}
-                disabled={isTyping}
-                className="flex-1 py-3 px-4 bg-slate-800/50 border border-slate-700 rounded-xl text-sm resize-none focus:outline-none focus:border-teal-500/50 focus:ring-1 focus:ring-teal-500/20 disabled:opacity-50"
-                style={{ minHeight: '48px', maxHeight: '120px' }}
-              />
-              
-              <button
-                onClick={() => handleSendMessage(inputValue)}
-                disabled={!inputValue.trim() || isTyping}
-                className="p-3 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl transition-colors flex-shrink-0"
-              >
-                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </button>
-            </div>
-            
-            <p className="text-xs text-slate-600 text-center mt-2">
-              Enter to send • Shift+Enter for new line
-            </p>
+                ))}
+                
+                {isTyping && (
+                  <div className="flex justify-start">
+                    <div className="bg-slate-800/50 border border-slate-700 rounded-2xl px-4 py-3">
+                      <div className="flex gap-1">
+                        <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-2 h-2 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                <div ref={messagesEndRef} />
+              </div>
+            )}
           </div>
-        </div>
 
-        {/* Disclaimer */}
-        <div className="text-center py-2 text-xs text-slate-600 border-t border-slate-800/50">
-          Not therapy, medical, or legal advice. For personal reflection only.
-        </div>
+          {/* Input area */}
+          <div className="border-t border-slate-800 p-4 bg-slate-900/30">
+            <div className="max-w-3xl mx-auto">
+              <div className="relative flex items-end gap-2">
+                <textarea
+                  ref={inputRef}
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="What's on your mind?"
+                  rows={1}
+                  disabled={isTyping}
+                  className="flex-1 py-3 px-4 bg-slate-800/50 border border-slate-700 rounded-xl text-sm resize-none focus:outline-none focus:border-teal-500/50 focus:ring-1 focus:ring-teal-500/20 disabled:opacity-50"
+                  style={{ minHeight: '48px', maxHeight: '120px' }}
+                />
+                
+                <button
+                  onClick={() => handleSendMessage(inputValue)}
+                  disabled={!inputValue.trim() || isTyping}
+                  className="p-3 bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl transition-colors flex-shrink-0"
+                >
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
+                </button>
+              </div>
+              
+              <p className="text-xs text-slate-600 text-center mt-2">
+                Enter to send • Shift+Enter for new line
+              </p>
+            </div>
+          </div>
+
+          {/* Disclaimer */}
+          <div className="text-center py-2 text-xs text-slate-600 border-t border-slate-800/50">
+            Not therapy, medical, or legal advice. For personal reflection only.
+          </div>
+        </main>
       </div>
 
       {/* Paywall Modal */}
