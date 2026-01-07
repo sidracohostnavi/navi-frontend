@@ -26,7 +26,6 @@ export default async function SettingsPage() {
 
   const getWebhookSecret = (account: any) => account?.webhook_secret || 'not-configured'
 
-  // Get last message sync time for Lodgify
   const { data: lastMessage } = await supabase
     .from('cohost_messages')
     .select('received_at')
@@ -54,7 +53,6 @@ export default async function SettingsPage() {
           <p className="text-gray-600">Configure your property management system connections</p>
         </div>
         
-        {/* Lodgify - Uses Polling */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -93,7 +91,6 @@ export default async function SettingsPage() {
           )}
         </div>
         
-        {/* Guesty - Uses Webhooks */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -127,7 +124,6 @@ export default async function SettingsPage() {
           </div>
         </div>
         
-        {/* Hostaway - Uses Webhooks */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -161,7 +157,6 @@ export default async function SettingsPage() {
           </div>
         </div>
         
-        {/* Instructions */}
         <div className="bg-yellow-50 rounded-lg p-6">
           <h3 className="text-sm font-semibold text-yellow-900 mb-2">Setup Instructions</h3>
           <div className="text-sm text-yellow-800 space-y-3">
@@ -170,7 +165,7 @@ export default async function SettingsPage() {
               <ol className="list-decimal list-inside ml-2 text-xs space-y-1">
                 <li>Enter your API key above and click Save</li>
                 <li>Messages will sync automatically every 5 minutes</li>
-                <li>Click &quot;Sync Now&quot; to fetch messages immediately</li>
+                <li>Click Sync Now to fetch messages immediately</li>
               </ol>
             </div>
             <div>
