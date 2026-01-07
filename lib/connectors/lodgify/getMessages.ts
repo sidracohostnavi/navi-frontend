@@ -4,21 +4,32 @@
 export interface LodgifyReservation {
   id: number
   guest: {
-    name: string
+    first_name?: string
+    last_name?: string
+    name?: string
+    full_name?: string
     email?: string
   }
   property_id: number
+  property_name?: string
   arrival: string
   departure: string
   status: string
+  thread_uid?: string
 }
 
 export interface LodgifyMessage {
   id: number
-  body: string
-  created_at: string
-  type: 'guest' | 'host' | 'system'
+  body?: string
+  text?: string
+  message?: string
+  created_at?: string
+  sent_at?: string
+  type?: string
   sender?: string
+  is_from_guest?: boolean
+  thread_uid?: string
+  direction?: string
 }
 
 export interface GetReservationsResult {
@@ -33,25 +44,16 @@ export interface GetMessagesResult {
   error?: string
 }
 
-const LODGIFY_API_BASE = 'https://api.lodgify.com/v2'
+const LODGIFY_API_BASE = 'https://api.lodgify.com/v1'
 
-// Get recent reservations (last 30 days check-in or currently staying)
+// Get all reservations
 export async function getRecentReservations(apiKey: string): Promise<GetReservationsResult> {
   if (!apiKey) {
     return { ok: false, error: 'Lodgify API key is not configured' }
   }
 
   try {
-    // Get reservations from last 30 days
-    const thirtyDaysAgo = new Date()
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-    const dateFrom = thirtyDaysAgo.toISOString().split('T')[0]
-    
-    const thirtyDaysFromNow = new Date()
-    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30)
-    const dateTo = thirtyDaysFromNow.toISOString().split('T')[0]
-
-    const url = `${LODGIFY_API_BASE}/reservations?dateFrom=${dateFrom}&dateTo=${dateTo}&includeCount=false`
+    const url = `${LODGIFY_API_BASE}/reservation`
 
     const response = await fetch(url, {
       method: 'GET',
@@ -73,7 +75,18 @@ export async function getRecentReservations(apiKey: string): Promise<GetReservat
     // Lodgify returns { items: [...] } or just an array
     const reservations = Array.isArray(data) ? data : (data.items || [])
 
-    return { ok: true, reservations }
+    // Transform guest data to consistent format
+    const transformedReservations = reservations.map((r: any) => ({
+      ...r,
+      guest: {
+        ...r.guest,
+        name: r.guest?.full_name || r.guest?.name || 
+              `${r.guest?.first_name || ''} ${r.guest?.last_name || ''}`.trim() || 
+              'Unknown Guest'
+      }
+    }))
+
+    return { ok: true, reservations: transformedReservations }
 
   } catch (error) {
     console.error('Lodgify getRecentReservations error:', error)
@@ -84,17 +97,22 @@ export async function getRecentReservations(apiKey: string): Promise<GetReservat
   }
 }
 
-// Get messages for a specific reservation
+// Get messages for a specific reservation using thread_uid
 export async function getReservationMessages(
   apiKey: string,
-  reservationId: number | string
+  reservationId: number | string,
+  threadUid?: string
 ): Promise<GetMessagesResult> {
   if (!apiKey) {
     return { ok: false, error: 'Lodgify API key is not configured' }
   }
 
   try {
-    const url = `${LODGIFY_API_BASE}/reservations/${reservationId}/messages`
+    // Try to get messages using the reservation's thread
+    // Lodgify uses thread_uid for message threads
+    const url = threadUid 
+      ? `${LODGIFY_API_BASE}/reservation/message/${threadUid}`
+      : `${LODGIFY_API_BASE}/reservation/${reservationId}/messages`
 
     const response = await fetch(url, {
       method: 'GET',
@@ -109,7 +127,8 @@ export async function getReservationMessages(
         return { ok: false, error: 'Invalid Lodgify API key' }
       }
       if (response.status === 404) {
-        return { ok: false, error: 'Reservation not found' }
+        // No messages for this reservation - that's OK
+        return { ok: true, messages: [] }
       }
       return { ok: false, error: `Lodgify API error: ${response.status}` }
     }
@@ -117,7 +136,7 @@ export async function getReservationMessages(
     const data = await response.json()
     
     // Lodgify returns { items: [...] } or just an array
-    const messages = Array.isArray(data) ? data : (data.items || [])
+    const messages = Array.isArray(data) ? data : (data.items || data.messages || [])
 
     return { ok: true, messages }
 
