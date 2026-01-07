@@ -1,59 +1,21 @@
-// /lib/connectors/guesty/index.ts
-// Complete Guesty API connector
+// /lib/connectors/hospitable/index.ts
+// Complete Hospitable API connector
 
 import {
   SendMessageInput,
   SendMessageResult,
   GetConversationsResult,
   GetMessagesResult,
-  AuthResult,
   PmsConversation,
   PmsMessage,
 } from '../types'
 
-const API_BASE = 'https://open-api.guesty.com/v1'
+const API_BASE = 'https://api.hospitable.com/v1'
 
 /**
- * Get OAuth access token using client credentials
+ * Hospitable uses Personal Access Tokens (PAT) - no OAuth flow needed
+ * The token is passed directly as accessToken
  */
-export async function getAccessToken(
-  clientId: string,
-  clientSecret: string
-): Promise<AuthResult> {
-  try {
-    const response = await fetch('https://open-api.guesty.com/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: clientSecret,
-        scope: 'open-api',
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      return { ok: false, error: `Auth failed: ${response.status} - ${errorText}` }
-    }
-
-    const data = await response.json()
-    return {
-      ok: true,
-      accessToken: data.access_token,
-      expiresAt: data.expires_in
-        ? new Date(Date.now() + data.expires_in * 1000).toISOString()
-        : undefined,
-    }
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : 'Auth request failed',
-    }
-  }
-}
 
 /**
  * Get list of conversations
@@ -64,7 +26,7 @@ export async function getConversations(
 ): Promise<GetConversationsResult> {
   try {
     const response = await fetch(
-      `${API_BASE}/communication/conversations?limit=${limit}&sort=-lastMessageAt`,
+      `${API_BASE}/conversations?per_page=${limit}&sort=-last_message_at`,
       {
         method: 'GET',
         headers: {
@@ -78,19 +40,19 @@ export async function getConversations(
       if (response.status === 401) {
         return { ok: false, error: 'Invalid or expired access token' }
       }
-      return { ok: false, error: `Guesty API error: ${response.status}` }
+      return { ok: false, error: `Hospitable API error: ${response.status}` }
     }
 
     const data = await response.json()
-    const items = data.data || data.results || []
+    const items = data.data || []
 
     const conversations: PmsConversation[] = items.map((item: any) => ({
-      id: String(item._id || item.id),
-      reservationId: item.reservationId ? String(item.reservationId) : undefined,
-      propertyId: item.listingId ? String(item.listingId) : undefined,
-      guestName: item.guest?.fullName || item.guestName || undefined,
+      id: String(item.id),
+      reservationId: item.reservation_id ? String(item.reservation_id) : undefined,
+      propertyId: item.property_id ? String(item.property_id) : undefined,
+      guestName: item.guest?.name || item.guest_name || undefined,
       guestEmail: item.guest?.email || undefined,
-      lastMessageAt: item.lastMessageAt || undefined,
+      lastMessageAt: item.last_message_at || undefined,
     }))
 
     return { ok: true, conversations }
@@ -112,7 +74,7 @@ export async function getMessages(
 ): Promise<GetMessagesResult> {
   try {
     const response = await fetch(
-      `${API_BASE}/communication/conversations/${conversationId}/messages?limit=${limit}`,
+      `${API_BASE}/conversations/${conversationId}/messages?per_page=${limit}`,
       {
         method: 'GET',
         headers: {
@@ -129,19 +91,19 @@ export async function getMessages(
       if (response.status === 404) {
         return { ok: true, messages: [] }
       }
-      return { ok: false, error: `Guesty API error: ${response.status}` }
+      return { ok: false, error: `Hospitable API error: ${response.status}` }
     }
 
     const data = await response.json()
-    const items = data.data || data.results || []
+    const items = data.data || []
 
     const messages: PmsMessage[] = items.map((item: any) => ({
-      id: String(item._id || item.id),
+      id: String(item.id),
       conversationId: conversationId,
-      body: item.body || item.message || '',
-      isFromGuest: item.sentBy === 'guest' || item.type === 'fromGuest',
-      sentAt: item.sentAt || item.createdAt || new Date().toISOString(),
-      senderName: item.senderName || undefined,
+      body: item.body || item.content || '',
+      isFromGuest: item.direction === 'inbound' || item.from === 'guest' || item.is_from_guest === true,
+      sentAt: item.sent_at || item.created_at || new Date().toISOString(),
+      senderName: item.sender_name || undefined,
     }))
 
     return { ok: true, messages }
@@ -171,7 +133,7 @@ export async function sendMessage(input: SendMessageInput): Promise<SendMessageR
 
   try {
     const response = await fetch(
-      `${API_BASE}/communication/conversations/${conversationId}/messages`,
+      `${API_BASE}/conversations/${conversationId}/messages`,
       {
         method: 'POST',
         headers: {
@@ -190,11 +152,11 @@ export async function sendMessage(input: SendMessageInput): Promise<SendMessageR
         return { ok: false, error: 'Conversation not found' }
       }
       const errorText = await response.text()
-      return { ok: false, error: `Guesty API error: ${response.status} - ${errorText}` }
+      return { ok: false, error: `Hospitable API error: ${response.status} - ${errorText}` }
     }
 
     const data = await response.json()
-    const messageId = data._id || data.id
+    const messageId = data.id || data.data?.id
 
     return {
       ok: true,

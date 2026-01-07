@@ -1,30 +1,70 @@
 // /lib/connectors/index.ts
-// PMS connector factory
+// Main router for PMS connectors
 
-import * as lodgify from './lodgify'
-import * as guesty from './guesty'
+import { PmsType, SendMessageInput, SendMessageResult, GetConversationsResult, GetMessagesResult } from './types'
 import * as hostaway from './hostaway'
-import { SendMessageInput, SendMessageResult } from './types'
+import * as guesty from './guesty'
+import * as hospitable from './hospitable'
 
-export type PmsType = 'lodgify' | 'guesty' | 'hostaway'
-
+/**
+ * Send a message via the appropriate PMS connector
+ */
 export async function sendMessageViaPms(
   pmsType: PmsType,
   input: SendMessageInput
 ): Promise<SendMessageResult> {
   switch (pmsType) {
-    case 'lodgify':
-      return lodgify.sendMessage(input)
-    
-    case 'guesty':
-      return guesty.sendMessage(input)
-    
     case 'hostaway':
       return hostaway.sendMessage(input)
-    
+    case 'guesty':
+      return guesty.sendMessage(input)
+    case 'hospitable':
+      return hospitable.sendMessage(input)
     default:
-      return { ok: false, error: `Unknown PMS type: ${pmsType}` }
+      return { ok: false, error: `Unsupported PMS type: ${pmsType}` }
   }
 }
 
-export type { SendMessageInput, SendMessageResult } from './types'
+/**
+ * Get conversations from a PMS
+ */
+export async function getConversationsFromPms(
+  pmsType: PmsType,
+  accessToken: string,
+  limit?: number
+): Promise<GetConversationsResult> {
+  switch (pmsType) {
+    case 'hostaway':
+      return hostaway.getConversations(accessToken, limit)
+    case 'guesty':
+      return guesty.getConversations(accessToken, limit)
+    case 'hospitable':
+      return hospitable.getConversations(accessToken, limit)
+    default:
+      return { ok: false, error: `Unsupported PMS type: ${pmsType}` }
+  }
+}
+
+/**
+ * Get messages for a conversation from a PMS
+ */
+export async function getMessagesFromPms(
+  pmsType: PmsType,
+  accessToken: string,
+  conversationId: string,
+  limit?: number
+): Promise<GetMessagesResult> {
+  switch (pmsType) {
+    case 'hostaway':
+      return hostaway.getMessages(accessToken, conversationId, limit)
+    case 'guesty':
+      return guesty.getMessages(accessToken, conversationId, limit)
+    case 'hospitable':
+      return hospitable.getMessages(accessToken, conversationId, limit)
+    default:
+      return { ok: false, error: `Unsupported PMS type: ${pmsType}` }
+  }
+}
+
+// Re-export types
+export * from './types'

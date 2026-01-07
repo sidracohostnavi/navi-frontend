@@ -1,23 +1,59 @@
 // /app/api/cohost/generate-draft/route.ts
-// Generate AI draft reply for a guest message
+// AI draft generation with property context and message categorization
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer'
+import OpenAI from 'openai'
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
+
+// Message categories for classification
+const CATEGORIES = [
+  'check_in',
+  'check_out', 
+  'wifi',
+  'parking',
+  'amenities',
+  'noise_complaint',
+  'maintenance',
+  'refund_request',
+  'directions',
+  'recommendations',
+  'emergency',
+  'general',
+] as const
+
+type MessageCategory = typeof CATEGORIES[number]
+
+// Risk levels by category
+const CATEGORY_RISK: Record<MessageCategory, 'low' | 'med' | 'high'> = {
+  check_in: 'low',
+  check_out: 'low',
+  wifi: 'low',
+  parking: 'low',
+  amenities: 'low',
+  directions: 'low',
+  recommendations: 'low',
+  general: 'low',
+  maintenance: 'med',
+  noise_complaint: 'high',
+  refund_request: 'high',
+  emergency: 'high',
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { messageId, workspaceId } = await request.json()
-    
-    if (!messageId || !workspaceId) {
-      return NextResponse.json(
-        { error: 'Missing messageId or workspaceId' },
-        { status: 400 }
-      )
+    const { messageId } = await request.json()
+
+    if (!messageId) {
+      return NextResponse.json({ error: 'Message ID is required' }, { status: 400 })
     }
-    
+
     const supabase = createCohostServiceClient()
-    
-    // 1. Fetch the message and conversation
+
+    // 1. Get the message with conversation details
     const { data: message, error: msgError } = await supabase
       .from('cohost_messages')
       .select(`
@@ -26,212 +62,294 @@ export async function POST(request: NextRequest) {
         workspace_id,
         conversation_id,
         cohost_conversations (
+          id,
           guest_name,
           property_id,
           pms_type
         )
       `)
       .eq('id', messageId)
-      .eq('workspace_id', workspaceId)
       .single()
-    
+
     if (msgError || !message) {
-      return NextResponse.json(
-        { error: 'Message not found' },
-        { status: 404 }
-      )
+      return NextResponse.json({ error: 'Message not found' }, { status: 404 })
     }
-    
+
     const conversation = message.cohost_conversations as any
+    const workspaceId = message.workspace_id
+
+    // 2. Get property details if available
+    let propertyContext = ''
+    let property = null
     
-    // 2. Fetch workspace prompt profile
+    if (conversation?.property_id) {
+      const { data: prop } = await supabase
+        .from('cohost_properties')
+        .select('*')
+        .eq('id', conversation.property_id)
+        .single()
+      
+      if (prop) {
+        property = prop
+        propertyContext = buildPropertyContext(prop)
+      }
+    }
+
+    // 3. Get workspace prompt profile
     const { data: promptProfile } = await supabase
       .from('cohost_prompt_profiles')
       .select('system_instructions')
       .eq('workspace_id', workspaceId)
       .single()
-    
-    // 3. Fetch property-specific override if property exists
-    let propertyOverride = null
-    if (conversation?.property_id) {
-      const { data: override } = await supabase
-        .from('cohost_property_prompt_overrides')
-        .select('override_instructions')
-        .eq('property_id', conversation.property_id)
-        .single()
-      propertyOverride = override?.override_instructions
+
+    // 4. Get recent training examples for this workspace (for style learning)
+    const { data: trainingExamples } = await supabase
+      .from('cohost_training_data')
+      .select('guest_message, final_response, category')
+      .eq('workspace_id', workspaceId)
+      .eq('was_edited', true)
+      .order('created_at', { ascending: false })
+      .limit(5)
+
+    // 5. Build the system prompt
+    const systemPrompt = buildSystemPrompt({
+      customInstructions: promptProfile?.system_instructions || '',
+      propertyContext,
+      trainingExamples: trainingExamples || [],
+      guestName: conversation?.guest_name || 'Guest',
+    })
+
+    // 6. Call OpenAI to classify and generate response
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message.body },
+      ],
+      functions: [
+        {
+          name: 'respond_to_guest',
+          description: 'Classify the message and generate a response',
+          parameters: {
+            type: 'object',
+            properties: {
+              category: {
+                type: 'string',
+                enum: CATEGORIES,
+                description: 'The category of the guest message',
+              },
+              response: {
+                type: 'string',
+                description: 'The response to send to the guest',
+              },
+              requires_human_review: {
+                type: 'boolean',
+                description: 'Whether this message should be escalated to a human',
+              },
+              escalation_reason: {
+                type: 'string',
+                description: 'If requires_human_review is true, explain why',
+              },
+            },
+            required: ['category', 'response', 'requires_human_review'],
+          },
+        },
+      ],
+      function_call: { name: 'respond_to_guest' },
+      temperature: 0.7,
+      max_tokens: 1000,
+    })
+
+    // 7. Parse the response
+    const functionCall = completion.choices[0]?.message?.function_call
+    if (!functionCall?.arguments) {
+      throw new Error('No response generated')
     }
-    
-    // 4. Build the system prompt
-    const baseInstructions = promptProfile?.system_instructions || ''
-    const systemPrompt = buildSystemPrompt(baseInstructions, propertyOverride)
-    
-    // 5. Call OpenAI API
-    const aiResponse = await callOpenAI(systemPrompt, message.body, conversation?.guest_name)
-    
-    // 6. Save the draft
+
+    const result = JSON.parse(functionCall.arguments)
+    const category = result.category as MessageCategory
+    const riskLevel = CATEGORY_RISK[category] || 'med'
+
+    // 8. Update message with category and risk
+    await supabase
+      .from('cohost_messages')
+      .update({
+        category,
+        risk_score: riskLevel === 'low' ? 25 : riskLevel === 'med' ? 50 : 75,
+        status: 'drafted',
+      })
+      .eq('id', messageId)
+
+    // 9. Save the draft
     const { data: draft, error: draftError } = await supabase
       .from('cohost_drafts')
       .insert({
         workspace_id: workspaceId,
         message_id: messageId,
         model: 'gpt-4o-mini',
-        draft_text: aiResponse.reply,
-        risk_level: aiResponse.risk_level,
-        recommended_action: aiResponse.recommended_action
+        draft_text: result.response,
+        risk_level: riskLevel,
+        recommended_action: result.requires_human_review ? 'escalate' : 'send',
       })
-      .select('id')
+      .select('id, draft_text, risk_level, recommended_action')
       .single()
-    
+
     if (draftError) {
       console.error('Failed to save draft:', draftError)
-      return NextResponse.json(
-        { error: 'Failed to save draft' },
-        { status: 500 }
-      )
+      return NextResponse.json({ error: 'Failed to save draft' }, { status: 500 })
     }
-    
-    // 7. Update message status to 'drafted'
-    await supabase
-      .from('cohost_messages')
-      .update({ status: 'drafted' })
-      .eq('id', messageId)
-    
-    // 8. Log audit action
-    await supabase
-      .from('cohost_actions_audit')
-      .insert({
-        workspace_id: workspaceId,
-        message_id: messageId,
-        action_type: 'draft_generated',
-        meta: { draft_id: draft.id, model: 'gpt-4o-mini' }
-      })
-    
-    return NextResponse.json({ 
-      success: true, 
-      draft_id: draft.id,
-      reply: aiResponse.reply,
-      risk_level: aiResponse.risk_level
+
+    // 10. Log audit action
+    await supabase.from('cohost_actions_audit').insert({
+      workspace_id: workspaceId,
+      message_id: messageId,
+      action_type: 'draft_generated',
+      meta: {
+        model: 'gpt-4o-mini',
+        category,
+        risk_level: riskLevel,
+        requires_human_review: result.requires_human_review,
+      },
     })
-    
+
+    return NextResponse.json({
+      success: true,
+      draft: {
+        id: draft.id,
+        text: draft.draft_text,
+        risk_level: draft.risk_level,
+        recommended_action: draft.recommended_action,
+        category,
+        requires_human_review: result.requires_human_review,
+        escalation_reason: result.escalation_reason,
+      },
+    })
   } catch (error) {
     console.error('Generate draft error:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: error instanceof Error ? error.message : 'Failed to generate draft' },
       { status: 500 }
     )
   }
 }
 
-function buildSystemPrompt(baseInstructions: string, propertyOverride: string | null): string {
-  const defaultInstructions = `You are a helpful, professional short-term rental host assistant. 
-Your job is to draft friendly, helpful replies to guest messages.
+// === HELPER FUNCTIONS ===
 
-RULES:
-- Be warm, professional, and concise
-- Never promise refunds or discounts without explicit approval
-- If you're unsure about something, ask clarifying questions
-- Keep replies short (2-4 sentences for simple questions)
-- For complex issues, acknowledge the concern and offer to help
-
-After drafting your reply, assess the risk level:
-- LOW: Routine questions (check-in times, directions, amenities)
-- MED: Complaints, special requests, or anything requiring judgment
-- HIGH: Refund requests, safety issues, threats, or legal concerns`
-
-  let prompt = defaultInstructions
+function buildPropertyContext(property: any): string {
+  const parts: string[] = []
   
-  if (baseInstructions) {
-    prompt += `\n\nADDITIONAL HOST INSTRUCTIONS:\n${baseInstructions}`
+  parts.push(`Property: ${property.name}`)
+  
+  if (property.address) {
+    parts.push(`Address: ${property.address}`)
   }
   
-  if (propertyOverride) {
-    prompt += `\n\nPROPERTY-SPECIFIC INSTRUCTIONS:\n${propertyOverride}`
+  if (property.check_in_time) {
+    parts.push(`Check-in time: ${formatTime(property.check_in_time)}`)
   }
   
-  return prompt
+  if (property.check_out_time) {
+    parts.push(`Check-out time: ${formatTime(property.check_out_time)}`)
+  }
+  
+  if (property.wifi_name) {
+    parts.push(`WiFi Network: ${property.wifi_name}`)
+    if (property.wifi_password) {
+      parts.push(`WiFi Password: ${property.wifi_password}`)
+    }
+  }
+  
+  if (property.parking_info) {
+    parts.push(`Parking: ${property.parking_info}`)
+  }
+  
+  if (property.house_rules) {
+    parts.push(`House Rules: ${property.house_rules}`)
+  }
+  
+  if (property.emergency_contact) {
+    parts.push(`Emergency Contact: ${property.emergency_contact}`)
+  }
+  
+  if (property.special_instructions) {
+    parts.push(`Special Instructions: ${property.special_instructions}`)
+  }
+  
+  return parts.join('\n')
 }
 
-interface AIResponse {
-  reply: string
-  risk_level: 'low' | 'med' | 'high'
-  recommended_action: string
-}
-
-async function callOpenAI(systemPrompt: string, guestMessage: string, guestName: string | null): Promise<AIResponse> {
-  const apiKey = process.env.OPENAI_API_KEY
-  
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured')
-  }
-  
-  const userPrompt = `Guest${guestName ? ` (${guestName})` : ''} sent this message:
-
-"${guestMessage}"
-
-Please provide:
-1. A draft reply to send to the guest
-2. Risk level (low, med, or high)
-3. Recommended next action
-
-Respond in this exact JSON format:
-{
-  "reply": "Your draft reply here",
-  "risk_level": "low",
-  "recommended_action": "Send as-is" 
-}`
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 500
-    })
-  })
-  
-  if (!response.ok) {
-    const error = await response.text()
-    console.error('OpenAI API error:', error)
-    throw new Error('Failed to generate AI response')
-  }
-  
-  const data = await response.json()
-  const content = data.choices[0]?.message?.content
-  
-  if (!content) {
-    throw new Error('No response from AI')
-  }
-  
-  // Parse the JSON response
+function formatTime(time: string): string {
   try {
-    // Extract JSON from the response (handles markdown code blocks)
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      throw new Error('No JSON found in response')
-    }
-    
-    const parsed = JSON.parse(jsonMatch[0])
-    return {
-      reply: parsed.reply || 'Unable to generate reply',
-      risk_level: ['low', 'med', 'high'].includes(parsed.risk_level) ? parsed.risk_level : 'med',
-      recommended_action: parsed.recommended_action || 'Review before sending'
-    }
-  } catch (parseError) {
-    console.error('Failed to parse AI response:', content)
-    // Fallback: use the raw content as the reply
-    return {
-      reply: content,
-      risk_level: 'med',
-      recommended_action: 'Review carefully - AI response format was unexpected'
-    }
+    const [hours, minutes] = time.split(':')
+    const hour = parseInt(hours)
+    const ampm = hour >= 12 ? 'PM' : 'AM'
+    const hour12 = hour % 12 || 12
+    return `${hour12}:${minutes} ${ampm}`
+  } catch {
+    return time
   }
+}
+
+function buildSystemPrompt({
+  customInstructions,
+  propertyContext,
+  trainingExamples,
+  guestName,
+}: {
+  customInstructions: string
+  propertyContext: string
+  trainingExamples: any[]
+  guestName: string
+}): string {
+  let prompt = `You are a helpful, friendly, and professional vacation rental host assistant. Your job is to respond to guest messages in a warm, concise manner.
+
+GUIDELINES:
+- Be friendly and professional
+- Keep responses concise but complete
+- Use the guest's name when appropriate
+- Provide specific information when available
+- If you don't know something, say so politely
+- For complaints or issues, show empathy first
+- For emergencies, prioritize guest safety
+
+GUEST NAME: ${guestName}
+`
+
+  if (propertyContext) {
+    prompt += `
+PROPERTY INFORMATION:
+${propertyContext}
+`
+  }
+
+  if (customInstructions) {
+    prompt += `
+HOST'S CUSTOM INSTRUCTIONS:
+${customInstructions}
+`
+  }
+
+  if (trainingExamples && trainingExamples.length > 0) {
+    prompt += `
+EXAMPLES OF HOW THE HOST PREFERS TO RESPOND:
+`
+    trainingExamples.forEach((ex, i) => {
+      prompt += `
+Example ${i + 1}:
+Guest: ${ex.guest_message.substring(0, 200)}
+Host response: ${ex.final_response.substring(0, 300)}
+`
+    })
+  }
+
+  prompt += `
+INSTRUCTIONS:
+1. Classify the guest's message into a category
+2. Generate an appropriate response
+3. Determine if this needs human review (complaints, refund requests, safety issues, angry guests)
+
+Respond using the respond_to_guest function.
+`
+
+  return prompt
 }
