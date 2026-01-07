@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer'
 import PmsAccountForm from './PmsAccountForm'
+import SyncButton from './SyncButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +26,19 @@ export default async function SettingsPage() {
 
   const getWebhookSecret = (account: any) => account?.webhook_secret || 'not-configured'
 
+  // Get last message sync time for Lodgify
+  const { data: lastMessage } = await supabase
+    .from('cohost_messages')
+    .select('received_at')
+    .eq('workspace_id', workspaceId)
+    .order('received_at', { ascending: false })
+    .limit(1)
+    .single()
+
+  const lastSyncDisplay = lastMessage?.received_at 
+    ? new Date(lastMessage.received_at).toLocaleString()
+    : 'Never'
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-2xl mx-auto">
@@ -40,12 +54,12 @@ export default async function SettingsPage() {
           <p className="text-gray-600">Configure your property management system connections</p>
         </div>
         
-        {/* Lodgify */}
+        {/* Lodgify - Uses Polling */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Lodgify</h2>
-              <p className="text-sm text-gray-500">Connect your Lodgify account to auto-send messages</p>
+              <p className="text-sm text-gray-500">Messages sync automatically every 5 minutes</p>
             </div>
             {hasLodgifyKey ? (
               <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
@@ -66,15 +80,20 @@ export default async function SettingsPage() {
             keyHint="Find your API key in Lodgify → Settings → Integrations → API"
           />
           
-          <div className="mt-4 p-3 bg-blue-50 rounded">
-            <p className="text-xs font-medium text-blue-900 mb-1">Webhook URL:</p>
-            <code className="text-xs text-blue-800 break-all">
-              https://YOUR_DOMAIN/api/webhooks/lodgify/{workspaceId}?secret={getWebhookSecret(lodgifyAccount)}
-            </code>
-          </div>
+          {hasLodgifyKey && (
+            <div className="mt-4 p-3 bg-green-50 rounded border border-green-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-green-900">Auto-sync enabled</p>
+                  <p className="text-xs text-green-700">Last message: {lastSyncDisplay}</p>
+                </div>
+                <SyncButton workspaceId={workspaceId} />
+              </div>
+            </div>
+          )}
         </div>
         
-        {/* Guesty */}
+        {/* Guesty - Uses Webhooks */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -103,12 +122,12 @@ export default async function SettingsPage() {
           <div className="mt-4 p-3 bg-blue-50 rounded">
             <p className="text-xs font-medium text-blue-900 mb-1">Webhook URL:</p>
             <code className="text-xs text-blue-800 break-all">
-              https://YOUR_DOMAIN/api/webhooks/guesty/{workspaceId}?secret={getWebhookSecret(guestyAccount)}
+              https://naviverse-pearl.vercel.app/api/webhooks/guesty/{workspaceId}?secret={getWebhookSecret(guestyAccount)}
             </code>
           </div>
         </div>
         
-        {/* Hostaway */}
+        {/* Hostaway - Uses Webhooks */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -137,7 +156,7 @@ export default async function SettingsPage() {
           <div className="mt-4 p-3 bg-blue-50 rounded">
             <p className="text-xs font-medium text-blue-900 mb-1">Webhook URL:</p>
             <code className="text-xs text-blue-800 break-all">
-              https://YOUR_DOMAIN/api/webhooks/hostaway/{workspaceId}?secret={getWebhookSecret(hostawayAccount)}
+              https://naviverse-pearl.vercel.app/api/webhooks/hostaway/{workspaceId}?secret={getWebhookSecret(hostawayAccount)}
             </code>
           </div>
         </div>
@@ -145,13 +164,24 @@ export default async function SettingsPage() {
         {/* Instructions */}
         <div className="bg-yellow-50 rounded-lg p-6">
           <h3 className="text-sm font-semibold text-yellow-900 mb-2">Setup Instructions</h3>
-          <ol className="text-sm text-yellow-800 list-decimal list-inside space-y-1">
-            <li>Enter your API key/token above and click Save</li>
-            <li>Copy the Webhook URL shown for your PMS</li>
-            <li>Replace YOUR_DOMAIN with your Vercel deployment URL</li>
-            <li>Paste the webhook URL in your PMS settings</li>
-            <li>Send a test message to verify it works</li>
-          </ol>
+          <div className="text-sm text-yellow-800 space-y-3">
+            <div>
+              <p className="font-medium">Lodgify:</p>
+              <ol className="list-decimal list-inside ml-2 text-xs space-y-1">
+                <li>Enter your API key above and click Save</li>
+                <li>Messages will sync automatically every 5 minutes</li>
+                <li>Click &quot;Sync Now&quot; to fetch messages immediately</li>
+              </ol>
+            </div>
+            <div>
+              <p className="font-medium">Guesty / Hostaway:</p>
+              <ol className="list-decimal list-inside ml-2 text-xs space-y-1">
+                <li>Enter your API key/token above and click Save</li>
+                <li>Copy the Webhook URL shown for your PMS</li>
+                <li>Paste the webhook URL in your PMS settings</li>
+              </ol>
+            </div>
+          </div>
         </div>
       </div>
     </div>
