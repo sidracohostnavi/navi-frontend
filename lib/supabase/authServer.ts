@@ -10,7 +10,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 // Server client (for server components and API routes)
 export async function createServerSupabaseClient() {
   const cookieStore = await cookies()
-  
+
   return createServerClient(
     supabaseUrl,
     supabaseAnonKey,
@@ -37,40 +37,40 @@ export async function createServerSupabaseClient() {
 export async function getCurrentUser() {
   const supabase = await createServerSupabaseClient()
   const { data: { user }, error } = await supabase.auth.getUser()
-  
+
   if (error || !user) {
     return null
   }
-  
+
   return user
 }
 
 // Get user's workspace ID
 export async function getUserWorkspaceId(userId: string): Promise<string | null> {
   const supabase = await createServerSupabaseClient()
-  
+
   const { data, error } = await supabase
     .from('cohost_workspace_members')
     .select('workspace_id')
     .eq('user_id', userId)
     .single()
-  
+
   if (error || !data) {
     return null
   }
-  
+
   return data.workspace_id
 }
 
 // Get current user with workspace
 export async function getCurrentUserWithWorkspace() {
   const user = await getCurrentUser()
-  
+
   if (!user) {
     return { user: null, workspaceId: null }
   }
-  
+
   const workspaceId = await getUserWorkspaceId(user.id)
-  
+
   return { user, workspaceId }
 }

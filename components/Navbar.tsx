@@ -1,17 +1,63 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { Menu, X } from 'lucide-react';
-import { useState } from 'react';
+import { Menu, X, User } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { createClient } from '@/lib/supabase/client';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 export function Navbar() {
     const pathname = usePathname();
+    const router = useRouter();
     const [isOpen, setIsOpen] = useState(false);
+    const [user, setUser] = useState<SupabaseUser | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [mounted, setMounted] = useState(false);
+
+    // Create supabase client
+    const supabase = createClient();
+
+    useEffect(() => {
+        setMounted(true);
+        // Check initial session
+        const checkUser = async () => {
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                setUser(user);
+            } catch (error) {
+                console.error('Error checking auth:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        checkUser();
+
+        // Listen for changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            setUser(session?.user ?? null);
+            setLoading(false);
+        });
+
+        return () => {
+            subscription.unsubscribe();
+        };
+    }, [supabase]);
+
+    const handleSignOut = async () => {
+        await supabase.auth.signOut();
+        router.refresh();
+        setUser(null); // Optimistic update
+    };
 
     // Simple active link check
     const isActive = (path: string) => pathname === path;
+
+    // Don't render auth state during SSR to avoid hydration mismatch
+    // (Though simple showing/hiding links is usually fine, specific user details need wait)
+    // We'll show a loading placeholder or default to signed out until loaded on client
 
     return (
         <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100">
@@ -56,18 +102,43 @@ export function Navbar() {
 
                 {/* Right: Auth & CTA (Desktop) */}
                 <div className="hidden md:flex items-center space-x-6">
-                    <Link
-                        href="/auth/signin"
-                        className="text-sm font-medium text-gray-600 hover:text-black transition-colors"
-                    >
-                        Sign In
-                    </Link>
-                    <Link
-                        href="/join"
-                        className="bg-black text-white text-sm font-medium px-4 py-2 rounded-full hover:bg-gray-800 transition-all"
-                    >
-                        Join NaviVerse
-                    </Link>
+                    {loading ? (
+                        // Loading skeleton or empty
+                        <div className="w-20 h-8 animate-pulse bg-gray-100 rounded" />
+                    ) : user ? (
+                        <>
+                            <Link
+                                href="/dashboard"
+                                className="text-sm font-medium text-gray-600 hover:text-black transition-colors"
+                            >
+                                Dashboard
+                            </Link>
+                            <button
+                                onClick={handleSignOut}
+                                className="text-sm font-medium text-gray-500 hover:text-red-600 transition-colors"
+                            >
+                                Sign Out
+                            </button>
+                            <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center border border-gray-200">
+                                <User size={16} className="text-gray-500" />
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <Link
+                                href="/auth/login"
+                                className="text-sm font-medium text-gray-600 hover:text-black transition-colors"
+                            >
+                                Sign In
+                            </Link>
+                            <Link
+                                href="/auth/signup"
+                                className="bg-black text-white text-sm font-medium px-4 py-2 rounded-full hover:bg-gray-800 transition-all"
+                            >
+                                Join NaviVerse
+                            </Link>
+                        </>
+                    )}
                 </div>
 
                 {/* Mobile Menu Toggle */}
@@ -105,21 +176,45 @@ export function Navbar() {
                     >
                         The Constellation
                     </Link>
+
                     <div className="pt-4 border-t border-gray-100 flex flex-col space-y-4">
-                        <Link
-                            href="/auth/signin"
-                            className="text-base font-medium text-gray-600 hover:text-black"
-                            onClick={() => setIsOpen(false)}
-                        >
-                            Sign In
-                        </Link>
-                        <Link
-                            href="/join"
-                            className="bg-black text-white text-center text-sm font-medium px-4 py-2 rounded-full hover:bg-gray-800"
-                            onClick={() => setIsOpen(false)}
-                        >
-                            Join NaviVerse
-                        </Link>
+                        {user ? (
+                            <>
+                                <Link
+                                    href="/dashboard"
+                                    className="text-base font-medium text-gray-900 hover:text-black"
+                                    onClick={() => setIsOpen(false)}
+                                >
+                                    Go to Dashboard
+                                </Link>
+                                <button
+                                    onClick={() => {
+                                        handleSignOut();
+                                        setIsOpen(false);
+                                    }}
+                                    className="text-base font-medium text-gray-500 hover:text-red-600 text-left"
+                                >
+                                    Sign Out
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <Link
+                                    href="/auth/login"
+                                    className="text-base font-medium text-gray-600 hover:text-black"
+                                    onClick={() => setIsOpen(false)}
+                                >
+                                    Sign In
+                                </Link>
+                                <Link
+                                    href="/auth/signup"
+                                    className="bg-black text-white text-center text-sm font-medium px-4 py-2 rounded-full hover:bg-gray-800"
+                                    onClick={() => setIsOpen(false)}
+                                >
+                                    Join NaviVerse
+                                </Link>
+                            </>
+                        )}
                     </div>
                 </div>
             )}
