@@ -43,7 +43,7 @@ function SignupContent() {
             const { error: googleError } = await supabase.auth.signInWithOAuth({
                 provider: 'google',
                 options: {
-                    redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+                    redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next === '/entry' ? '/dashboard' : next)}`,
                 },
             });
 

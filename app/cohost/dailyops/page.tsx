@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export default async function DailyOpsPage() {
-  const supabase = createClient()
+  const supabase = await createClient()
 
   const { data: tasks, error } = await supabase
     .from('tasks')
