@@ -1,522 +1,653 @@
-// app/calendar/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import FullCalendar from '@fullcalendar/react';
-import dayGridPlugin from '@fullcalendar/daygrid';
-import interactionPlugin from '@fullcalendar/interaction';
-import { createClient } from '@supabase/supabase-js';
-import { 
-  CalendarEvent, 
-  Property, 
-  CleanerShare,
-  CHANNEL_COLORS,
-  CHANNEL_LABELS 
-} from '@/lib/supabase/types';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import {
+  HomeIcon,
+  UsersIcon,
+  ExclamationTriangleIcon
+} from '@heroicons/react/20/solid';
+import { createClient } from '@/lib/supabase/client';
+import { getPlatformColors, getPlatformBadgeLabel } from '@/lib/utils/platform-colors';
+
+// --- Types ---
+type Property = {
+  id: string;
+  name: string;
+  image?: string;
+};
+
+type Channel = 'direct' | 'airbnb' | 'vrbo' | 'other';
+
+type Booking = {
+  id: string;
+  propertyId: string;
+  guestName: string;
+  guestFirstName?: string;
+  guestLastInitial?: string;
+  guestCount?: number;
+  startDate: string; // ISO YYYY-MM-DD
+  endDate: string;   // ISO YYYY-MM-DD
+  status: 'confirmed' | 'pending';
+  totalPrice: number;
+  channel: Channel;
+  platform?: string;
+  platformName: string;
+  needsReview: boolean;
+};
+
+// --- Constants ---
+const CELL_WIDTH = 140; // px
+const ROW_HEIGHT = 80; // px
+const HEADER_HEIGHT = 60; // px
+const MIN_SIDEBAR_WIDTH = 180;
+const MAX_SIDEBAR_WIDTH = 420;
+
+const TODAY = new Date();
+// Range Limits: -12 Months to +24 Months
+const MIN_DATE = new Date(TODAY);
+MIN_DATE.setMonth(TODAY.getMonth() - 12);
+MIN_DATE.setDate(1); // Start of that month
+
+const MAX_DATE = new Date(TODAY);
+MAX_DATE.setMonth(TODAY.getMonth() + 24);
+MAX_DATE.setDate(1); // Start of that month
+
+const CHANNEL_PRIORITY: Record<Channel, number> = {
+  'direct': 1,
+  'airbnb': 2,
+  'vrbo': 3,
+  'other': 4
+};
+
+const CHANNEL_COLORS: Record<Channel, { bg: string, border: string, text: string }> = {
+  'direct': { bg: 'bg-emerald-100', border: 'border-emerald-300', text: 'text-emerald-900' },
+  'airbnb': { bg: 'bg-rose-100', border: 'border-rose-300', text: 'text-rose-900' },
+  'vrbo': { bg: 'bg-blue-100', border: 'border-blue-300', text: 'text-blue-900' },
+  'other': { bg: 'bg-gray-100', border: 'border-gray-300', text: 'text-gray-900' },
+};
+
+// --- Helpers ---
+const toIso = (d: Date) => d.toISOString().split('T')[0];
+const addDays = (d: Date, days: number) => {
+  const newDate = new Date(d);
+  newDate.setDate(newDate.getDate() + days);
+  return newDate;
+};
+
+const getDatesInWindow = (startDate: Date, days: number) => {
+  const dates = [];
+  for (let i = 0; i < days; i++) {
+    dates.push(addDays(startDate, i));
+  }
+  return dates;
+};
+
+const getGridPosition = (booking: Booking, windowStart: Date, windowDays: number) => {
+  const bStart = new Date(booking.startDate);
+  const bEnd = new Date(booking.endDate);
+  const wStart = new Date(windowStart);
+
+  bStart.setHours(0, 0, 0, 0);
+  bEnd.setHours(0, 0, 0, 0);
+  wStart.setHours(0, 0, 0, 0);
+
+  const diffTime = bStart.getTime() - wStart.getTime();
+  let startIndex = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  const durationTime = bEnd.getTime() - bStart.getTime();
+  const durationDays = Math.ceil(durationTime / (1000 * 60 * 60 * 24));
+
+  let visibleStart = startIndex;
+  let visibleDuration = durationDays;
+
+  // Clip from start
+  if (visibleStart < 0) {
+    visibleDuration += visibleStart;
+    visibleStart = 0;
+  }
+
+  // Clip from end
+  if (visibleStart + visibleDuration > windowDays) {
+    visibleDuration = windowDays - visibleStart;
+  }
+
+  return { start: visibleStart, span: visibleDuration, isVisible: visibleDuration > 0 };
+};
+
+// Deduplication Logic
+type BookingGroup = {
+  primary: Booking;
+  duplicates: Booking[];
+};
+
+const deduplicateBookings = (bookings: Booking[]): BookingGroup[] => {
+  const sorted = [...bookings].sort((a, b) =>
+    new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
+  );
+
+  const groups: BookingGroup[] = [];
+
+  for (const booking of sorted) {
+    let placed = false;
+    const bStart = new Date(booking.startDate).getTime();
+    const bEnd = new Date(booking.endDate).getTime();
+
+    for (const group of groups) {
+      const pStart = new Date(group.primary.startDate).getTime();
+      const pEnd = new Date(group.primary.endDate).getTime();
+
+      if (bStart < pEnd && bEnd > pStart) {
+        const currentPriority = CHANNEL_PRIORITY[group.primary.channel] || 99;
+        const newPriority = CHANNEL_PRIORITY[booking.channel] || 99;
+
+        if (newPriority < currentPriority) {
+          group.duplicates.push(group.primary);
+          group.primary = booking;
+        } else {
+          group.duplicates.push(booking);
+        }
+        placed = true;
+        break;
+      }
+    }
+
+    if (!placed) {
+      groups.push({ primary: booking, duplicates: [] });
+    }
+  }
+
+  return groups;
+};
 
 export default function CalendarPage() {
-  const [properties, setProperties] = useState<Property[]>([]);
-  const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [shares, setShares] = useState<CleanerShare[]>([]);
-  const [newShareName, setNewShareName] = useState('');
-  const [expiresIn, setExpiresIn] = useState('never');
-  const [creating, setCreating] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const supabase = createClient();
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Fetch properties
-  useEffect(() => {
-    async function fetchProperties() {
-      try {
-        const { data, error } = await supabase
-          .from('properties')
-          .select('*')
+  // Layout State
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [isResizing, setIsResizing] = useState(false);
+
+  // Infinite Scroll & Navigation State
+  const [rangeStart, setRangeStart] = useState(TODAY);
+  const [loadedDays, setLoadedDays] = useState(45); // Initial load window
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // Data State
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+
+  const dates = useMemo(() => getDatesInWindow(rangeStart, loadedDays), [rangeStart, loadedDays]);
+
+  // Initial Fetch (Properties + First 45 Days)
+  const fetchInitialData = useCallback(async (startPoint: Date = TODAY) => {
+    try {
+      setLoading(true);
+      // 1. Fetch Properties (only if empty)
+      if (properties.length === 0) {
+        const { data: propsData, error: propsError } = await supabase
+          .from('cohost_properties')
+          .select('id, name, image_url, color')
           .order('name');
-        
-        if (error) throw error;
-        setProperties(data || []);
-        if (data && data.length > 0) {
-          setSelectedPropertyId(data[0].id);
+
+        if (propsError) throw propsError;
+
+        const mappedProps: Property[] = (propsData || []).map(p => ({
+          id: p.id,
+          name: p.name,
+          image: p.image_url
+        }));
+        setProperties(mappedProps);
+
+        // 2. Fetch Initial Bookings
+        if (mappedProps.length === 0) {
+          setBookings([]);
+          setLoading(false);
+          return;
         }
-      } catch (err) {
-        console.error('Error fetching properties:', err);
-      } finally {
-        setLoading(false);
       }
+
+      await fetchBookingsRange(startPoint, addDays(startPoint, 45));
+
+    } catch (err) {
+      console.error('Error fetching calendar data:', err);
+    } finally {
+      setLoading(false);
     }
-    fetchProperties();
+  }, [supabase, properties.length]); // properties.length dependency to avoid re-fetching props
+
+  // Fetch Bookings for a specific range and MERGE into state
+  const fetchBookingsRange = async (start: Date, end: Date) => {
+    const startStr = start.toISOString();
+    const endStr = end.toISOString();
+
+    const { data: bookingsData, error } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('is_active', true)
+      .lt('check_in', endStr)
+      .gt('check_out', startStr);
+
+    if (error) {
+      console.error('Error fetching bookings:', error);
+      return;
+    }
+
+    const mappedBookings: Booking[] = (bookingsData || []).map(b => ({
+      id: b.id,
+      propertyId: b.property_id,
+      startDate: b.check_in.split('T')[0].replace(/-/g, '/'),
+      endDate: b.check_out.split('T')[0].replace(/-/g, '/'),
+      status: (b.status === 'confirmed' || b.status === 'pending') ? b.status : 'confirmed',
+      totalPrice: b.total_amount || 0,
+      channel: (['direct', 'airbnb', 'vrbo'].includes(b.source_type) ? b.source_type : 'other') as Channel,
+      platform: b.platform || b.source_type,
+      platformName: b.platform || b.source_type,
+      guestName: b.guest_name || 'Guest',
+      guestFirstName: b.guest_first_name,
+      guestLastInitial: b.guest_last_initial,
+      needsReview: b.needs_review || false,
+      guestCount: b.guest_count || 0
+    }));
+
+    setBookings(prev => {
+      // Merge and Deduplicate by ID
+      const existingIds = new Set(prev.map(b => b.id));
+      const newBookings = mappedBookings.filter(b => !existingIds.has(b.id));
+      return [...prev, ...newBookings];
+    });
+  };
+
+  const loadMoreDays = async () => {
+    if (loadingMore) return;
+
+    const currentEnd = addDays(rangeStart, loadedDays);
+
+    // Stop if we exceed MAX_DATE
+    if (currentEnd > MAX_DATE) return;
+
+    setLoadingMore(true);
+    const nextEnd = addDays(currentEnd, 30); // Load next 30 days
+
+    await fetchBookingsRange(currentEnd, nextEnd);
+    setLoadedDays(prev => prev + 30);
+    setLoadingMore(false);
+  };
+
+  // Scroll Handler for Lazy Loading
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollLeft, scrollWidth, clientWidth } = e.currentTarget;
+    // Trigger when within 600px of end
+    if (scrollLeft + clientWidth > scrollWidth - 600) {
+      loadMoreDays();
+    }
+  };
+
+  useEffect(() => {
+    fetchInitialData(TODAY);
+  }, [fetchInitialData]);
+
+  const handleRefresh = async () => {
+    if (properties.length === 0) return;
+    setSyncing(true);
+    // Simple refresh: clear bookings and refetch current range
+    setBookings([]);
+    setLoadedDays(45);
+    await fetchInitialData(rangeStart);
+    setSyncing(false);
+  };
+
+  // Jump / Navigation Handler
+  const jumpToDate = async (targetDate: Date) => {
+    // Clamp date
+    let d = new Date(targetDate);
+    if (d < MIN_DATE) d = new Date(MIN_DATE);
+    // Don't strictly clamp MAX for jump start, but ensure we don't render forever
+
+    // Reset state for new jump
+    setRangeStart(d);
+    setLoadedDays(45);
+    setBookings([]); // Clear old bookings to avoid memory bloat if jumping far
+    setLoading(true);
+
+    // Reset Scroll
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({ left: 0, behavior: 'auto' });
+    }
+
+    // Fetch new range
+    await fetchBookingsRange(d, addDays(d, 45));
+    setLoading(false);
+  };
+
+  const handleMonthChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const monthsToAdd = parseInt(e.target.value);
+    const newDate = new Date(TODAY);
+    newDate.setDate(1); // Normalize to 1st
+    newDate.setMonth(TODAY.getMonth() + monthsToAdd);
+    jumpToDate(newDate);
+  };
+
+  // Generate Month Options (-12 to +24)
+  const monthOptions = useMemo(() => {
+    const options = [];
+    for (let i = -12; i <= 24; i++) {
+      const d = new Date(TODAY);
+      d.setDate(1);
+      d.setMonth(TODAY.getMonth() + i);
+      const label = d.toLocaleString('default', { month: 'long', year: 'numeric' });
+      const value = i;
+      options.push({ label, value });
+    }
+    return options;
   }, []);
 
-  // Fetch events when property changes
+  // Calculate current selected month offset for dropdown
+  // Heuristic: compare rangeStart month/year to today
+  const currentMonthOffset = useMemo(() => {
+    return (rangeStart.getFullYear() - TODAY.getFullYear()) * 12 + (rangeStart.getMonth() - TODAY.getMonth());
+  }, [rangeStart]);
+
+  // Local Storage for Sidebar
   useEffect(() => {
-    async function fetchEvents() {
-      if (!selectedPropertyId) {
-        setEvents([]);
-        return;
-      }
-
-      try {
-        setLoading(true);
-        const { data: bookings, error } = await supabase
-          .from('bookings')
-          .select('*')
-          .eq('property_id', selectedPropertyId)
-          .eq('status', 'confirmed')
-          .gte('check_out', new Date().toISOString().split('T')[0]);
-
-        if (error) throw error;
-
-        const { data: property } = await supabase
-          .from('properties')
-          .select('name')
-          .eq('id', selectedPropertyId)
-          .single();
-
-        const calendarEvents: CalendarEvent[] = (bookings || []).map((booking) => ({
-          id: booking.id,
-          property_id: booking.property_id,
-          property_name: property?.name || 'Property',
-          title: booking.guest_name 
-            ? `${booking.guest_name}${booking.guest_count ? ` (${booking.guest_count})` : ''}`
-            : `Guest${booking.guest_count ? ` (${booking.guest_count})` : ''}`,
-          start: booking.check_in,
-          end: booking.check_out,
-          channel: booking.channel,
-          guest_name: booking.guest_name,
-          guest_count: booking.guest_count,
-          status: booking.status,
-          color: CHANNEL_COLORS[booking.channel] || '#6B7280',
-        }));
-
-        setEvents(calendarEvents);
-      } catch (err) {
-        console.error('Error fetching events:', err);
-      } finally {
-        setLoading(false);
-      }
+    const saved = localStorage.getItem('cohost_calendar_sidebar_width');
+    if (saved) {
+      const width = Number(saved);
+      if (!isNaN(width) && width >= MIN_SIDEBAR_WIDTH && width <= MAX_SIDEBAR_WIDTH) setSidebarWidth(width);
     }
-    fetchEvents();
-  }, [selectedPropertyId]);
+  }, []);
 
-  // Fetch shares when property changes
   useEffect(() => {
-    async function fetchShares() {
-      if (!selectedPropertyId) {
-        setShares([]);
-        return;
-      }
+    localStorage.setItem('cohost_calendar_sidebar_width', String(sidebarWidth));
+  }, [sidebarWidth]);
 
-      try {
-        const { data, error } = await supabase
-          .from('cleaner_shares')
-          .select('*')
-          .eq('property_id', selectedPropertyId)
-          .order('created_at', { ascending: false });
-
-        if (error) throw error;
-        setShares(data || []);
-      } catch (err) {
-        console.error('Error fetching shares:', err);
-      }
+  // Resizing Logic
+  const startResizing = useCallback(() => setIsResizing(true), []);
+  const stopResizing = useCallback(() => setIsResizing(false), []);
+  const resize = useCallback((e: MouseEvent) => {
+    if (isResizing) {
+      const newWidth = e.clientX;
+      if (newWidth >= MIN_SIDEBAR_WIDTH && newWidth <= MAX_SIDEBAR_WIDTH) setSidebarWidth(newWidth);
     }
-    fetchShares();
-  }, [selectedPropertyId]);
+  }, [isResizing]);
 
-  const handleEventClick = (info: { event: { id: string } }) => {
-    const event = events.find(e => e.id === info.event.id);
-    if (event) setSelectedEvent(event);
-  };
+  useEffect(() => {
+    window.addEventListener('mousemove', resize);
+    window.addEventListener('mouseup', stopResizing);
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [resize, stopResizing]);
 
-  const handleCreateShare = async () => {
-    if (!selectedPropertyId) return;
-    setCreating(true);
-
-    try {
-      let expiresAt: string | null = null;
-      if (expiresIn !== 'never') {
-        const date = new Date();
-        date.setDate(date.getDate() + parseInt(expiresIn));
-        expiresAt = date.toISOString();
-      }
-
-      const { error } = await supabase
-        .from('cleaner_shares')
-        .insert({
-          property_id: selectedPropertyId,
-          name: newShareName || 'Cleaner',
-          expires_at: expiresAt,
-        });
-
-      if (error) throw error;
-
-      // Refresh shares
-      const { data } = await supabase
-        .from('cleaner_shares')
-        .select('*')
-        .eq('property_id', selectedPropertyId)
-        .order('created_at', { ascending: false });
-
-      setShares(data || []);
-      setNewShareName('');
-      setExpiresIn('never');
-    } catch (err) {
-      console.error('Error creating share:', err);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleCopyLink = async (token: string, shareId: string) => {
-    const shareUrl = `${window.location.origin}/share/${token}`;
-    await navigator.clipboard.writeText(shareUrl);
-    setCopiedId(shareId);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const handleDeactivateShare = async (shareId: string) => {
-    if (!confirm('Revoke this share link?')) return;
-
-    try {
-      const { error } = await supabase
-        .from('cleaner_shares')
-        .update({ is_active: false })
-        .eq('id', shareId);
-
-      if (error) throw error;
-
-      setShares(shares.map(s => 
-        s.id === shareId ? { ...s, is_active: false } : s
-      ));
-    } catch (err) {
-      console.error('Error deactivating share:', err);
-    }
-  };
-
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-  };
-
-  const formatShortDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-  };
-
-  const activeShares = shares.filter(s => s.is_active);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <div className={`flex flex-col h-[calc(100vh-64px)] bg-white ${isResizing ? 'cursor-col-resize select-none' : ''}`}>
+      {/* Top Controls */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
+        <h1 className="text-xl font-bold text-gray-900">Booking Timeline</h1>
+
         <div className="flex items-center gap-6">
-          <h1 className="text-2xl font-semibold text-gray-900">Booking Calendar</h1>
-          
-          {/* Property Selector */}
-          <div className="relative flex items-center">
-            <svg 
-              className="absolute left-3 w-4 h-4 text-gray-500 pointer-events-none"
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2"
+          <div className="flex items-center gap-2">
+
+            {/* Debug Stats (Requested by User) */}
+            <div className="hidden md:flex flex-col items-end text-[10px] text-gray-400 font-mono leading-tight mr-4">
+              <span>Loaded: {bookings.length}</span>
+              <span>Wind: {loadedDays}d</span>
+            </div>
+
+            <Link
+              href="/cohost/settings/calendar"
+              className="px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
             >
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              <polyline points="9 22 9 12 15 12 15 22" />
-            </svg>
-            <select
-              value={selectedPropertyId || ''}
-              onChange={(e) => setSelectedPropertyId(e.target.value)}
-              className="appearance-none pl-9 pr-9 py-2 text-sm font-medium text-gray-800 bg-white border border-gray-300 rounded-lg cursor-pointer min-w-[200px] hover:border-gray-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              Sync Settings
+            </Link>
+            <button
+              onClick={handleRefresh}
+              disabled={syncing || loading}
+              className={`p-2 text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-colors shadow-sm ${syncing ? 'animate-spin' : ''}`}
             >
-              <option value="" disabled>Select a property</option>
-              {properties.map((property) => (
-                <option key={property.id} value={property.id}>
-                  {property.name}
-                </option>
-              ))}
-            </select>
-            <svg 
-              className="absolute right-3 w-4 h-4 text-gray-500 pointer-events-none"
-              viewBox="0 0 24 24" 
-              fill="none" 
-              stroke="currentColor" 
-              strokeWidth="2"
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-100">
+            <input
+              type="checkbox"
+              checked={showDuplicates}
+              onChange={e => setShowDuplicates(e.target.checked)}
+              className="rounded text-blue-600 focus:ring-blue-500"
+            />
+            Show duplicates
+          </label>
+
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <select
+                value={currentMonthOffset}
+                onChange={handleMonthChange}
+                className="appearance-none bg-white border border-gray-200 text-gray-700 text-xs font-medium py-2 pl-3 pr-8 rounded-lg cursor-pointer hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              >
+                {monthOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
+              </div>
+            </div>
+
+            <button
+              onClick={() => jumpToDate(TODAY)}
+              className="px-3 py-2 text-xs font-medium bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors shadow-sm"
             >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+              Today
+            </button>
           </div>
         </div>
-
-        <button 
-          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          onClick={() => setShowShareModal(true)}
-          disabled={!selectedPropertyId}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
-            <polyline points="16 6 12 2 8 6" />
-            <line x1="12" y1="2" x2="12" y2="15" />
-          </svg>
-          Share with Cleaner
-        </button>
       </div>
 
-      {/* Calendar */}
-      <div className="bg-white rounded-xl shadow-sm p-6 min-h-[600px]">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center h-96 text-gray-500">
-            <div className="w-8 h-8 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin mb-3" />
-            <p>Loading calendar...</p>
+      {/* Grid Container */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-auto relative custom-scrollbar overscroll-contain"
+      >
+        <div
+          className="grid relative"
+          style={{
+            minWidth: 'max-content',
+            gridTemplateColumns: `${sidebarWidth}px repeat(${loadedDays}, ${CELL_WIDTH}px)`,
+          }}
+        >
+          {/* Header Row: Properties Title */}
+          <div
+            className="sticky top-0 left-0 z-40 bg-white border-b border-r border-gray-200 flex items-center px-4 font-semibold text-gray-500 text-xs uppercase tracking-wider shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)]"
+            style={{ gridColumn: '1', gridRow: '1', height: HEADER_HEIGHT }}
+          >
+            Properties
           </div>
-        ) : (
-          <FullCalendar
-            plugins={[dayGridPlugin, interactionPlugin]}
-            initialView="dayGridMonth"
-            headerToolbar={{
-              left: 'prev,next today',
-              center: 'title',
-              right: 'dayGridMonth,dayGridWeek',
-            }}
-            events={events.map(e => ({
-              id: e.id,
-              title: e.title,
-              start: e.start,
-              end: e.end,
-              backgroundColor: e.color,
-              borderColor: e.color,
-            }))}
-            eventClick={handleEventClick}
-            eventDisplay="block"
-            dayMaxEvents={3}
-            height="auto"
-          />
+
+          {/* Header Row: Dates */}
+          {dates.map((date, i) => {
+            const isToday = toIso(date) === toIso(TODAY);
+            return (
+              <div
+                key={`header-${i}`}
+                className={`sticky top-0 z-30 border-b border-r border-gray-100 flex flex-col justify-center items-center h-[60px] ${isToday ? 'bg-blue-50/80 text-blue-700 box-border border-b-blue-500' : 'bg-gray-50/95 text-gray-700'}`}
+                style={{ gridRow: '1', gridColumn: i + 2, height: HEADER_HEIGHT }}
+              >
+                <div className="text-xs font-medium uppercase">{date.toLocaleDateString('en-US', { weekday: 'short' })}</div>
+                <div className={`text-sm font-bold mt-0.5 ${isToday ? 'bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center' : ''}`}>
+                  {date.getDate()}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Property Rows */}
+          {!loading && properties.map((property, rowIdx) => {
+            const gridRow = rowIdx + 2;
+            const propertyBookings = bookings.filter(b => b.propertyId === property.id);
+            const bookingGroups = deduplicateBookings(propertyBookings);
+            const isLast = rowIdx === properties.length - 1;
+            const rowClass = isLast ? '' : 'border-b border-gray-100';
+
+            return (
+              <React.Fragment key={property.id}>
+                {/* Sidebar Cell */}
+                <div
+                  className={`sticky left-0 z-20 bg-white border-r border-gray-200 p-4 flex flex-col justify-center shadow-[4px_0_12px_-4px_rgba(0,0,0,0.05)] ${rowClass}`}
+                  style={{ gridColumn: '1', gridRow: gridRow, height: ROW_HEIGHT }}
+                >
+                  <div className="flex items-center gap-3">
+                    {property.image ? (
+                      <div className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 flex-shrink-0">
+                        <img src={property.image} alt={property.name} className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 border border-blue-200 flex-shrink-0">
+                        <span className="text-xs font-bold">{property.name.charAt(0)}</span>
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-900 truncate text-sm">{property.name}</p>
+                      <p className="text-[10px] text-gray-500 truncate">Entire home</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Grid Cells */}
+                {dates.map((date, colIdx) => {
+                  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                  return (
+                    <div
+                      key={`${property.id}-day-${colIdx}`}
+                      className={`border-r border-gray-50 ${isWeekend ? 'bg-gray-50/30' : 'bg-white'} ${rowClass}`}
+                      style={{ gridRow: gridRow, gridColumn: colIdx + 2 }}
+                    />
+                  );
+                })}
+
+                {/* Bookings */}
+                {bookingGroups.flatMap((group) => {
+                  const itemsToRender = [group.primary];
+                  if (showDuplicates) itemsToRender.push(...group.duplicates);
+
+                  return itemsToRender.map((booking) => {
+                    const isDuplicate = booking.id !== group.primary.id;
+                    const { start, span, isVisible } = getGridPosition(booking, rangeStart, loadedDays);
+                    if (!isVisible) return null;
+
+                    const colors = getPlatformColors(booking.platform);
+                    const badgeLabel = getPlatformBadgeLabel(booking.platform);
+
+                    const getBookingState = (b: Booking) => {
+                      const todayStr = toIso(TODAY);
+                      if (b.endDate < todayStr) return 'past';
+                      if (b.startDate <= todayStr && b.endDate >= todayStr) return 'active';
+                      return 'future';
+                    };
+
+                    const bookingState = getBookingState(booking);
+                    const isPast = bookingState === 'past';
+                    const isActive = bookingState === 'active';
+
+                    return (
+                      <div
+                        key={booking.id}
+                        className={`relative mx-1 group ${isDuplicate ? 'mt-8 h-8' : ''} ${isPast ? 'z-0' : 'z-10'} ${isActive ? 'z-30' : ''}`}
+                        style={{
+                          gridRow: gridRow,
+                          gridColumn: `${start + 2} / span ${span}`,
+                          alignSelf: isDuplicate ? 'start' : 'center',
+                          marginTop: isDuplicate ? '32px' : '0',
+                        }}
+                      >
+                        <div
+                          className={`
+                            rounded-lg border flex items-center px-1.5 overflow-hidden cursor-pointer transition-all
+                            ${isDuplicate ? 'h-full text-[10px] opacity-60' : 'h-12'}
+                            ${colors.bg} ${colors.border} ${colors.text}
+                            ${isPast ? 'opacity-60 grayscale filter brightness-95 border-opacity-20' : 'shadow-sm border-opacity-40'}
+                            ${isActive ? 'ring-2 ring-blue-500 ring-offset-1 shadow-lg scale-[1.02]' : 'hover:scale-[1.02] active:scale-[0.98]'}
+                          `}
+                        >
+                          {booking.needsReview && (
+                            <div className="absolute top-0 right-0 p-0.5 bg-yellow-400 text-yellow-900 rounded-bl shadow-sm z-20" title="Needs Review">
+                              <ExclamationTriangleIcon className="w-3 h-3" />
+                            </div>
+                          )}
+
+                          <div className="flex flex-col min-w-0 w-full">
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <div className={`p-0.5 rounded-full bg-white/50 shrink-0`}>
+                                  {booking.channel === 'airbnb' ? <span className="text-[10px] font-bold px-0.5">A</span> :
+                                    booking.channel === 'vrbo' ? <span className="text-[10px] font-bold px-0.5">V</span> :
+                                      <HomeIcon className="w-3 h-3" />}
+                                </div>
+                                <span className="font-bold truncate text-xs">
+                                  {booking.guestFirstName && booking.guestLastInitial
+                                    ? `${booking.guestFirstName} ${booking.guestLastInitial}.`
+                                    : booking.guestName}
+                                </span>
+                              </div>
+                              {booking.guestCount && booking.guestCount > 0 && (
+                                <div className="flex items-center gap-0.5 bg-white/60 px-1 rounded-full shrink-0">
+                                  <UsersIcon className="w-2.5 h-2.5 opacity-70" />
+                                  <span className="text-[9px] font-bold">{booking.guestCount}</span>
+                                </div>
+                              )}
+                            </div>
+                            {!isDuplicate && (
+                              <div className="flex items-center gap-1 mt-0.5">
+                                <span className={`text-[9px] px-1 py-0.5 rounded ${colors.badge}`}>
+                                  {badgeLabel}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Tooltip */}
+                        <div className={`absolute left-1/2 -translate-x-1/2 hidden group-hover:block z-50 min-w-[180px] ${rowIdx === 0 ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
+                          <div className="bg-gray-900 text-white text-xs rounded-lg py-3 px-3 shadow-xl text-center ring-1 ring-white/10">
+                            <div className="flex items-center justify-center gap-2 mb-2 border-b border-white/20 pb-2">
+                              <span className="font-bold text-sm block">{booking.guestName}</span>
+                              {booking.needsReview && <span className="text-[10px] bg-yellow-500 text-black px-1.5 py-0.5 rounded font-bold">REVIEW</span>}
+                            </div>
+                            <div className="space-y-1 text-left px-1">
+                              <p className="opacity-80 flex justify-between"><span>Check-in:</span> <span className="font-mono">{booking.startDate}</span></p>
+                              <p className="opacity-80 flex justify-between"><span>Check-out:</span> <span className="font-mono">{booking.endDate}</span></p>
+                              <p className="opacity-80 flex justify-between"><span>Guests:</span> <span>{booking.guestCount || '-'}</span></p>
+                              <p className="opacity-80 flex justify-between"><span>Source:</span> <span>{booking.platformName}</span></p>
+                            </div>
+                          </div>
+                          <div className={`w-2 h-2 bg-gray-900 transform rotate-45 mx-auto absolute left-0 right-0 ${rowIdx === 0 ? '-top-1' : '-bottom-1'}`}></div>
+                        </div>
+                      </div>
+                    );
+                  });
+                })}
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        {/* Loading Indicator at End */}
+        {loadingMore && (
+          <div className="flex justify-center py-4 bg-gray-50 border-t border-gray-100">
+            <span className="text-sm text-gray-500 animate-pulse">Loading future dates...</span>
+          </div>
         )}
       </div>
-
-      {/* Legend */}
-      <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-        <h3 className="text-sm font-semibold text-gray-600 mb-3">Channels</h3>
-        <div className="flex flex-wrap gap-6">
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded bg-[#FF5A5F]" />
-            <span className="text-sm text-gray-600">Airbnb</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded bg-[#3D5A80]" />
-            <span className="text-sm text-gray-600">VRBO</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3 h-3 rounded bg-[#003580]" />
-            <span className="text-sm text-gray-600">Booking.com</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Booking Modal */}
-      {selectedEvent && (
-        <div 
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setSelectedEvent(null)}
-        >
-          <div 
-            className="bg-white rounded-2xl p-6 max-w-md w-full relative shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button 
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-1"
-              onClick={() => setSelectedEvent(null)}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-
-            <div className="flex gap-2 mb-4">
-              <span 
-                className="text-xs font-semibold text-white px-2.5 py-1 rounded uppercase tracking-wide"
-                style={{ backgroundColor: CHANNEL_COLORS[selectedEvent.channel] }}
-              >
-                {CHANNEL_LABELS[selectedEvent.channel]}
-              </span>
-              <span className={`text-xs font-medium px-2.5 py-1 rounded capitalize ${
-                selectedEvent.status === 'confirmed' 
-                  ? 'bg-green-100 text-green-800' 
-                  : 'bg-red-100 text-red-800'
-              }`}>
-                {selectedEvent.status}
-              </span>
-            </div>
-
-            <h2 className="text-xl font-semibold text-gray-900 mb-1">
-              {selectedEvent.guest_name || 'Guest'}
-            </h2>
-            
-            {selectedEvent.guest_count && (
-              <p className="text-sm text-gray-500 mb-6">
-                {selectedEvent.guest_count} guests
-              </p>
-            )}
-
-            <div className="bg-gray-50 rounded-xl p-4">
-              <div className="flex justify-between">
-                <div>
-                  <span className="block text-xs text-gray-400 uppercase tracking-wide mb-1">Check-in</span>
-                  <span className="text-sm font-medium text-gray-800">{formatDate(selectedEvent.start)}</span>
-                </div>
-                <div className="text-right">
-                  <span className="block text-xs text-gray-400 uppercase tracking-wide mb-1">Check-out</span>
-                  <span className="text-sm font-medium text-gray-800">{formatDate(selectedEvent.end)}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5 pt-4 border-t border-gray-200">
-              <p className="flex items-center gap-2 text-sm text-gray-500">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                  <polyline points="9 22 9 12 15 12 15 22" />
-                </svg>
-                {selectedEvent.property_name}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Share Modal */}
-      {showShareModal && selectedPropertyId && (
-        <div 
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-          onClick={() => setShowShareModal(false)}
-        >
-          <div 
-            className="bg-white rounded-2xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto relative shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button 
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-1"
-              onClick={() => setShowShareModal(false)}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Share with Cleaner</h2>
-            <p className="text-sm text-gray-500 mb-6">
-              Create a link for your cleaner to view booking dates and guest counts (no names).
-            </p>
-
-            {/* Create new share */}
-            <div className="bg-gray-50 rounded-xl p-4 mb-6">
-              <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                Create New Link
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr,140px] gap-3 mb-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Name (optional)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., Maria's Cleaning"
-                    value={newShareName}
-                    onChange={(e) => setNewShareName(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Expires</label>
-                  <select
-                    value={expiresIn}
-                    onChange={(e) => setExpiresIn(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  >
-                    <option value="never">Never</option>
-                    <option value="7">7 days</option>
-                    <option value="30">30 days</option>
-                    <option value="90">90 days</option>
-                  </select>
-                </div>
-              </div>
-              <button 
-                className="w-full py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                onClick={handleCreateShare}
-                disabled={creating}
-              >
-                {creating ? 'Creating...' : 'Create Share Link'}
-              </button>
-            </div>
-
-            {/* Active shares */}
-            {activeShares.length > 0 && (
-              <div>
-                <h3 className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-3">
-                  Active Links
-                </h3>
-                <div className="space-y-3">
-                  {activeShares.map((share) => (
-                    <div key={share.id} className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 p-3 bg-gray-50 rounded-lg">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-900">{share.name || 'Unnamed'}</p>
-                        <p className="text-xs text-gray-500">
-                          Created {formatShortDate(share.created_at)}
-                          {share.expires_at && ` · Expires ${formatShortDate(share.expires_at)}`}
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-100 rounded-md hover:bg-indigo-200 transition-colors"
-                          onClick={() => handleCopyLink(share.token, share.id)}
-                        >
-                          {copiedId === share.id ? (
-                            <>
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <polyline points="20 6 9 17 4 12" />
-                              </svg>
-                              Copied!
-                            </>
-                          ) : (
-                            <>
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                              </svg>
-                              Copy
-                            </>
-                          )}
-                        </button>
-                        <button
-                          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-600 border border-gray-300 rounded-md hover:text-red-600 hover:border-red-200 hover:bg-red-50 transition-colors"
-                          onClick={() => handleDeactivateShare(share.id)}
-                        >
-                          Revoke
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

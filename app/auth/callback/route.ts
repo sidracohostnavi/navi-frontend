@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const code = requestUrl.searchParams.get('code');
   const token_hash = requestUrl.searchParams.get('token_hash');
   const type = requestUrl.searchParams.get('type') as any; // 'signup' | 'email' | 'recovery' | 'invite'
-  const next = requestUrl.searchParams.get('next') || '/entry';
+  const next = requestUrl.searchParams.get('next') || '/dashboard';
   const error_description = requestUrl.searchParams.get('error_description');
 
   if (error_description) {

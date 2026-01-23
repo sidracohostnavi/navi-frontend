@@ -4,6 +4,9 @@
 import { ProtectedRoute } from '@/lib/components/ProtectedRoute'
 import { CohostHeader } from '@/lib/components/CohostHeader'
 
+// Prevent SSG since this requires AuthProvider at runtime
+export const dynamic = 'force-dynamic';
+
 export default function MessagingLayout({
   children,
 }: {

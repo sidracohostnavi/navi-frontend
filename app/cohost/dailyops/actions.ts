@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 
 // Mark a task as completed
 export async function markTaskDone(taskId: string) {
-  const supabase = createClient()
+  const supabase = await createClient()
 
   const { error } = await supabase
     .from('tasks')
@@ -25,7 +25,7 @@ export async function markTaskDone(taskId: string) {
 
 // Mark a task as dismissed
 export async function dismissTask(taskId: string) {
-  const supabase = createClient()
+  const supabase = await createClient()
 
   const { error } = await supabase
     .from('tasks')

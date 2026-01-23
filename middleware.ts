@@ -10,6 +10,7 @@ const PUBLIC_ROUTES = [
     '/auth/signup',
     '/auth/callback',
     '/entry', // Entry handles its own auth check
+    '/cohost', // Public Landing Page
 ]
 
 // Routes that should be ignored by middleware

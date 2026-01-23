@@ -23,6 +23,11 @@ const nextConfig: NextConfig = {
         source: '/signup',
         destination: '/auth/signup',
         permanent: true,
+      },
+      {
+        source: '/cohost/calendar/settings',
+        destination: '/cohost/settings/calendar',
+        permanent: true,
       }
     ]
   },

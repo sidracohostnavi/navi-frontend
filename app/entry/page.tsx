@@ -16,8 +16,10 @@ export default async function EntryPage() {
     const workspaceId = await ensureWorkspace(user.id)
 
     if (!workspaceId) {
-        // Failed to get/create workspace, redirect to login with error
-        redirect('/auth/login?error=workspace_setup_failed')
+        // Failed to get/create workspace. 
+        // STOP REDIRECTING TO LOGIN to avoid loops.
+        // Instead, throw an error that Next.js will catch and show.
+        throw new Error("Workspace setup failed. Please contact support or try again later.");
     }
 
     // Get enabled apps for this workspace

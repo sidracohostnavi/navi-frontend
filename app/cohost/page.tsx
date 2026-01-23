@@ -1,108 +1,77 @@
-'use client';
-
-import { Check, Star, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+import { createClient } from '@/lib/supabase/server';
+import { ArrowRight, CheckCircle2 } from 'lucide-react';
 
-export default function CoHostPage() {
+export default async function CoHostPublicPage() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
   return (
-    <div className="bg-white text-gray-900">
-      {/* Hero Section (Airbnb Red) */}
-      <section className="bg-[#FF385C] text-white py-24 px-6 relative overflow-hidden">
-        <div className="max-w-4xl mx-auto text-center relative z-10">
-          <div className="inline-block bg-white/20 backdrop-blur-sm px-4 py-1 rounded-full text-sm font-semibold mb-6">
-            The #1 AI for Short-Term Rentals
-          </div>
-          <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-8">
-            Turn Auto-Pilot On.
+    <div className="min-h-screen bg-white">
+      {/* Hero Section */}
+      <div className="max-w-7xl mx-auto px-6 pt-24 pb-16">
+        <div className="max-w-3xl">
+          <h1 className="text-5xl md:text-6xl font-bold tracking-tight text-gray-900 mb-6">
+            AI-Powered Property Management
           </h1>
-          <p className="text-xl md:text-2xl opacity-90 mb-12 max-w-2xl mx-auto">
-            CoHost handles your guest messaging, schedules cleaners, and monitors reviews 24/7.
+          <p className="text-xl text-gray-500 mb-8 leading-relaxed">
+            CoHost automates your vacation rental operations. From guest messaging to calendar sync and daily tasks, we handle the busy work so you can scale.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button className="bg-white text-[#FF385C] px-8 py-4 rounded-xl font-bold text-lg hover:shadow-lg transition-transform hover:-translate-y-1">
-              Start Free Trial
-            </button>
-            <button className="bg-transparent border-2 border-white text-white px-8 py-4 rounded-xl font-bold text-lg hover:bg-white/10 transition-colors">
-              View Demo
-            </button>
+
+          <div className="flex gap-4">
+            {user ? (
+              <Link
+                href="/cohost/dashboard"
+                className="inline-flex items-center gap-2 px-6 py-3 bg-black text-white rounded-full font-medium hover:bg-gray-800 transition-colors"
+              >
+                Go to Dashboard <ArrowRight className="w-4 h-4" />
+              </Link>
+            ) : (
+              <Link
+                href="/auth/login?next=/cohost/dashboard"
+                className="inline-flex items-center gap-2 px-6 py-3 bg-black text-white rounded-full font-medium hover:bg-gray-800 transition-colors"
+              >
+                Sign in to CoHost <ArrowRight className="w-4 h-4" />
+              </Link>
+            )}
+            <Link
+              href="#features"
+              className="inline-flex items-center gap-2 px-6 py-3 border border-gray-200 text-gray-600 rounded-full font-medium hover:bg-gray-50 transition-colors"
+            >
+              Learn more
+            </Link>
           </div>
         </div>
-      </section>
+      </div>
 
-      {/* How It Works */}
-      <section className="py-24 px-6 max-w-6xl mx-auto">
-        <h2 className="text-4xl font-bold text-center mb-16">How CoHost Works</h2>
-        <div className="grid md:grid-cols-3 gap-12">
-          {[
-            { title: "1. Connect", desc: "Link your Airbnb & VRBO accounts in 30 seconds." },
-            { title: "2. Train", desc: "CoHost reads your past messages to learn your voice." },
-            { title: "3. Relax", desc: "CoHost replies to guests instantly. You just approve." }
-          ].map((item, i) => (
-            <div key={i} className="text-center">
-              <div className="w-16 h-16 bg-red-100 text-[#FF385C] rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6">
-                {i + 1}
+      {/* Features Preview */}
+      <div id="features" className="bg-gray-50 py-24">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="grid md:grid-cols-3 gap-12">
+            <div>
+              <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mb-6 text-blue-600">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2" /><line x1="16" x2="16" y1="2" y2="6" /><line x1="8" x2="8" y1="2" y2="6" /><line x1="3" x2="21" y1="10" y2="10" /></svg>
               </div>
-              <h3 className="text-xl font-bold mb-3">{item.title}</h3>
-              <p className="text-gray-500">{item.desc}</p>
+              <h3 className="text-xl font-bold mb-3">Smart Calendar</h3>
+              <p className="text-gray-500">Unified view of all your bookings across Airbnb, VRBO, and direct channels.</p>
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ROI Calculator Stub */}
-      <section className="bg-gray-50 py-24 px-6">
-        <div className="max-w-4xl mx-auto bg-white p-8 md:p-12 rounded-3xl shadow-xl border border-gray-100">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold mb-4">Calculate Your Savings</h2>
-            <p className="text-gray-500">See how many hours CoHost can buy back for you.</p>
-          </div>
-          <div className="grid md:grid-cols-2 gap-8 items-center">
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Properties Managed</label>
-                <input type="range" min="1" max="50" className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#FF385C]" />
-                <div className="text-right text-sm font-bold text-[#FF385C] mt-1">5 Properties</div>
+            <div>
+              <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mb-6 text-purple-600">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Avg. Messages per Booking</label>
-                <input type="range" min="1" max="20" className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#FF385C]" />
-                <div className="text-right text-sm font-bold text-[#FF385C] mt-1">8 Messages</div>
-              </div>
+              <h3 className="text-xl font-bold mb-3">AI Messaging</h3>
+              <p className="text-gray-500">Draft responses to guest inquiries instantly using context from your property details.</p>
             </div>
-            <div className="bg-[#FF385C] text-white p-8 rounded-2xl text-center">
-              <div className="text-lg opacity-90 mb-2">You save approximately</div>
-              <div className="text-5xl font-bold mb-2">12 hrs</div>
-              <div className="text-sm opacity-80">per month</div>
+            <div>
+              <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center mb-6 text-orange-600">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" /><path d="M12 11h4" /><path d="M12 16h4" /><path d="M8 11h.01" /><path d="M8 16h.01" /></svg>
+              </div>
+              <h3 className="text-xl font-bold mb-3">Daily Operations</h3>
+              <p className="text-gray-500">Automated task lists for cleaning crews and maintenance tracking.</p>
             </div>
           </div>
         </div>
-      </section>
-
-      {/* Pricing */}
-      <section className="py-24 px-6 max-w-7xl mx-auto">
-        <h2 className="text-4xl font-bold text-center mb-16">Simple Pricing</h2>
-        <div className="grid md:grid-cols-3 gap-8">
-          {[
-            { name: "Starter", price: "$29", color: "bg-gray-100 text-gray-900" },
-            { name: "Pro", price: "$79", color: "bg-[#FF385C] text-white shadow-xl scale-105" },
-            { name: "Agency", price: "$199", color: "bg-gray-100 text-gray-900" }
-          ].map((plan, i) => (
-            <div key={i} className={`p-8 rounded-3xl ${plan.color} relative flex flex-col`}>
-              <h3 className="text-xl font-bold mb-4">{plan.name}</h3>
-              <div className="text-4xl font-bold mb-6">{plan.price}<span className="text-lg font-normal opacity-70">/mo</span></div>
-              <ul className="space-y-4 mb-8 flex-1">
-                <li className="flex items-center gap-2 text-sm"><Check size={16} /> Auto-Responder</li>
-                <li className="flex items-center gap-2 text-sm"><Check size={16} /> Calendar Sync</li>
-                {i > 0 && <li className="flex items-center gap-2 text-sm"><Check size={16} /> Multi-Channel</li>}
-                {i > 1 && <li className="flex items-center gap-2 text-sm"><Check size={16} /> Dedicated Support</li>}
-              </ul>
-              <button className="w-full bg-white text-black py-3 rounded-xl font-bold hover:bg-opacity-90 transition-opacity">
-                Select {plan.name}
-              </button>
-            </div>
-          ))}
-        </div>
-      </section>
+      </div>
     </div>
   );
 }
