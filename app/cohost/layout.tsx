@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { useReviewCount } from '@/lib/supabase/hooks/useReviewCount';
 import type { User } from '@supabase/supabase-js';
 
 export default function CohostLayout({
@@ -18,6 +19,7 @@ export default function CohostLayout({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
+  const { count: reviewCount } = useReviewCount();
 
   useEffect(() => {
     // Check initial session
@@ -175,7 +177,24 @@ export default function CohostLayout({
               </div>
               <div className="flex items-center">
                 <div className="ml-4 flex items-center md:ml-6">
-                  {/* Placeholder Notification Button */}
+                  {/* Review Inbox Button */}
+                  <Link
+                    href="/cohost/review"
+                    className="relative bg-gray-100 p-1 rounded-full text-gray-400 hover:text-gray-600 focus:outline-none mr-2"
+                    title="Review Inbox"
+                  >
+                    <span className="sr-only">View review items</span>
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                    {reviewCount > 0 && (
+                      <span className="absolute -top-1 -right-1 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-white bg-red-600 rounded-full min-w-[18px]">
+                        {reviewCount > 99 ? '99+' : reviewCount}
+                      </span>
+                    )}
+                  </Link>
+
+                  {/* Notification Button */}
                   <button className="bg-gray-100 p-1 rounded-full text-gray-400 hover:text-gray-500 focus:outline-none">
                     <span className="sr-only">View notifications</span>
                     <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">

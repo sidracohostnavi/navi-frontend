@@ -22,9 +22,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [workspaceId, setWorkspaceId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  
+
   const supabase = createBrowserClient()
-  
+
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setLoading(false)
     })
-    
+
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
@@ -48,54 +48,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     )
-    
+
     return () => subscription.unsubscribe()
   }, [])
-  
+
   async function fetchWorkspace(userId: string) {
+    // Get user's workspace membership
     const { data } = await supabase
       .from('cohost_workspace_members')
       .select('workspace_id')
       .eq('user_id', userId)
-      .single()
-    
+      .limit(1)
+      .maybeSingle()
+
     setWorkspaceId(data?.workspace_id ?? null)
   }
-  
+
   async function signIn(email: string, password: string) {
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
-    
+
     if (error) {
       return { error: error.message }
     }
-    
+
     return {}
   }
-  
+
   async function signUp(email: string, password: string, workspaceName?: string) {
     const response = await fetch('/api/auth/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, workspaceName }),
     })
-    
+
     const data = await response.json()
-    
+
     if (!response.ok) {
       return { error: data.error }
     }
-    
+
     return {}
   }
-  
+
   async function signOut() {
     await supabase.auth.signOut()
     setWorkspaceId(null)
   }
-  
+
   return (
     <AuthContext.Provider value={{
       user,

@@ -49,11 +49,13 @@ export async function getCurrentUser() {
 export async function getUserWorkspaceId(userId: string): Promise<string | null> {
   const supabase = await createServerSupabaseClient()
 
+  // Get user's workspace membership
   const { data, error } = await supabase
     .from('cohost_workspace_members')
     .select('workspace_id')
     .eq('user_id', userId)
-    .single()
+    .limit(1)
+    .maybeSingle()
 
   if (error || !data) {
     return null

@@ -83,10 +83,18 @@ export async function POST(
 
         // We can log the success here.
 
+        // 5. Update last synced timestamp
+        await supabase
+            .from('connections')
+            .update({ gmail_last_verified_at: new Date().toISOString() })
+            .eq('id', connectionId);
+
         return NextResponse.json({
             success: true,
-            emails_scanned: results.length, // This is actually successfully parsed facts count
-            workspace_id: workspace_id, // Returning for debug
+            emails_scanned: results.length,
+            reservations_parsed: results.length,
+            reservations_upserted: results.length,
+            workspace_id: workspace_id,
             message: `Processed ${results.length} reservation emails.`
         });
 

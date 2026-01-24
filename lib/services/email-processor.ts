@@ -296,6 +296,15 @@ export class EmailProcessor {
             return { enriched: 0, missing: 0 };
         }
 
+        // 1.5. Fetch workspace_id from connection for review item creation
+        const { data: connection } = await supabase
+            .from('connections')
+            .select('workspace_id')
+            .eq('id', connectionId)
+            .single();
+
+        const workspaceId = connection?.workspace_id;
+
         // 2. Resolve Properties
         const { data: connProps } = await supabase
             .from('connection_properties')
@@ -419,15 +428,13 @@ export class EmailProcessor {
                         .contains('extracted_data', { confirmation_code: fact.confirmation_code })
                         .single();
 
-                    if (!existingReview) {
+                    if (!existingReview && workspaceId) {
                         console.warn(`[EmailProcessor] ⚠️ Booking Missing from Calendar: ${fact.guest_name} (${fact.check_in}) code=${fact.confirmation_code}`);
 
                         await supabase.from('enrichment_review_items').insert({
+                            workspace_id: workspaceId,
                             connection_id: connectionId,
-                            item_type: 'BOOKING_MISSING_FROM_CALENDAR',
-                            raw_content: `Booking for ${fact.guest_name} on ${fact.check_in} (Code: ${fact.confirmation_code}) found in email but missing from calendar.`,
                             extracted_data: fact,
-                            confidence_score: 0.9,
                             status: 'pending'
                         });
                         missingCount++;
@@ -438,6 +445,214 @@ export class EmailProcessor {
 
         console.log(`[EmailProcessor] Enrichment Complete. Updated ${enrichedCount} bookings. Identified ${missingCount} missing bookings.`);
         return { enriched: enrichedCount, missing: missingCount };
+    }
+    /**
+     * Reprocess stored Gmail messages and route unmatched reservations to Review items.
+     * SAFETY: Does NOT create bookings. Does NOT refetch Gmail. Review-only routing.
+     * 
+     * This is the ONLY safe path for email-confirmed bookings without iCal backing.
+     */
+    static async reprocessGmailToReview(connectionId: string) {
+        const supabase = await createClient();
+        console.log(`[EmailProcessor] ========== REPROCESS GMAIL TO REVIEW ==========`);
+        console.log(`[EmailProcessor] Connection ID: ${connectionId}`);
+
+        // 1. Fetch workspace_id via connection -> user_id -> workspace membership
+        const { data: connection } = await supabase
+            .from('connections')
+            .select('user_id')
+            .eq('id', connectionId)
+            .single();
+
+        if (!connection?.user_id) {
+            console.warn(`[EmailProcessor] No user found for connection ${connectionId}`);
+            return { messages_scanned: 0, reservations_parsed: 0, review_items_created: 0, review_items_skipped: 0 };
+        }
+
+        // Look up workspace from user membership
+        const { data: membership } = await supabase
+            .from('cohost_workspace_members')
+            .select('workspace_id')
+            .eq('user_id', connection.user_id)
+            .limit(1)
+            .maybeSingle();
+
+        // Fallback: get workspace from existing bookings if no membership
+        let workspaceId = membership?.workspace_id;
+        if (!workspaceId) {
+            const { data: sampleBooking } = await supabase
+                .from('bookings')
+                .select('workspace_id')
+                .limit(1)
+                .single();
+            workspaceId = sampleBooking?.workspace_id;
+        }
+
+        if (!workspaceId) {
+            console.warn(`[EmailProcessor] No workspace found for connection ${connectionId}`);
+            return { messages_scanned: 0, reservations_parsed: 0, review_items_created: 0, review_items_skipped: 0 };
+        }
+
+        // 2. Fetch ALL stored Gmail messages - NO FILTER on processed_at
+        const { data: emails, error: emailError } = await supabase
+            .from('gmail_messages')
+            .select('id, gmail_message_id, subject, snippet, raw_metadata, connection_id')
+            .eq('connection_id', connectionId);
+
+        if (emailError) {
+            console.error(`[EmailProcessor] Error fetching gmail_messages:`, emailError);
+            return { messages_scanned: 0, reservations_parsed: 0, review_items_created: 0, review_items_skipped: 0 };
+        }
+
+        if (!emails || emails.length === 0) {
+            console.log(`[EmailProcessor] No stored Gmail messages found.`);
+            return { messages_scanned: 0, reservations_parsed: 0, review_items_created: 0, review_items_skipped: 0 };
+        }
+
+        console.log(`[EmailProcessor] Found ${emails.length} stored Gmail messages to scan.`);
+
+        // 3. Fetch ALL iCal-backed bookings for this workspace (to check matches)
+        const { data: icalBookings } = await supabase
+            .from('bookings')
+            .select('id, check_in, check_out, reservation_code, source_feed_id, external_uid, raw_data')
+            .eq('workspace_id', workspaceId)
+            .not('source_feed_id', 'is', null); // Only iCal-backed bookings
+
+        const icalBookingsList = icalBookings || [];
+        console.log(`[EmailProcessor] Found ${icalBookingsList.length} iCal-backed bookings for matching.`);
+
+        // 4. Fetch existing review items to check for duplicates (idempotency)
+        const { data: existingReviewItems } = await supabase
+            .from('enrichment_review_items')
+            .select('id, extracted_data')
+            .eq('workspace_id', workspaceId)
+            .eq('connection_id', connectionId);
+
+        // Build set of gmail_message_ids already in review
+        const existingGmailIds = new Set<string>();
+        if (existingReviewItems) {
+            for (const item of existingReviewItems) {
+                const gmailId = item.extracted_data?.gmail_message_id;
+                if (gmailId) {
+                    existingGmailIds.add(gmailId);
+                }
+            }
+        }
+        console.log(`[EmailProcessor] ${existingGmailIds.size} gmail_message_ids already in review items.`);
+
+        let messagesScanned = 0;
+        let reservationsParsed = 0;
+        let reviewItemsCreated = 0;
+        let reviewItemsSkipped = 0;
+
+        // 5. Process each email
+        for (const email of emails) {
+            messagesScanned++;
+
+            try {
+                // Prepare body for parsing
+                const raw = email.raw_metadata || {};
+                let bodyToParse = '';
+                if (raw.full_html) {
+                    bodyToParse = raw.full_html
+                        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                        .replace(/<[^>]+>/g, '\n')
+                        .replace(/&nbsp;/g, ' ');
+                } else if (raw.full_text) {
+                    bodyToParse = raw.full_text;
+                } else {
+                    bodyToParse = email.snippet || '';
+                }
+
+                // Parse reservation
+                const fact = this.parseReservationEmail(bodyToParse, email.subject || '');
+                if (!fact) {
+                    // Not a reservation email, skip silently
+                    continue;
+                }
+
+                // Validate
+                const validationError = this.validateReservationFact(fact);
+                if (validationError) {
+                    console.warn(`[EmailProcessor] Validation failed for ${email.gmail_message_id}: ${validationError}`);
+                    continue;
+                }
+
+                reservationsParsed++;
+                console.log(`[EmailProcessor] Parsed reservation: ${fact.guest_name} (${fact.check_in}) code=${fact.confirmation_code}`);
+
+                // 6. Check if matching iCal-backed booking exists
+                let hasICalMatch = false;
+
+                // A. Confirmation code match
+                if (fact.confirmation_code) {
+                    hasICalMatch = icalBookingsList.some(b =>
+                        b.reservation_code === fact.confirmation_code ||
+                        (b.raw_data && JSON.stringify(b.raw_data).includes(fact.confirmation_code)) ||
+                        (b.external_uid && b.external_uid.includes(fact.confirmation_code))
+                    );
+                }
+
+                // B. Exact date match (only if no code match)
+                if (!hasICalMatch && fact.check_in && fact.check_out) {
+                    hasICalMatch = icalBookingsList.some(b => {
+                        const bIn = new Date(b.check_in).toISOString().split('T')[0];
+                        const bOut = new Date(b.check_out).toISOString().split('T')[0];
+                        return bIn === fact.check_in && bOut === fact.check_out;
+                    });
+                }
+
+                if (hasICalMatch) {
+                    console.log(`[EmailProcessor] iCal match found for ${fact.guest_name} - skipping review item`);
+                    continue;
+                }
+
+                // 7. NO iCal match - Check idempotency via gmail_message_id
+                if (existingGmailIds.has(email.gmail_message_id)) {
+                    console.log(`[EmailProcessor] Review item already exists for gmail_message_id=${email.gmail_message_id}`);
+                    reviewItemsSkipped++;
+                    continue;
+                }
+
+                // 8. Create review item (NEVER create booking)
+                // Table schema: workspace_id, connection_id, extracted_data, status
+                console.warn(`[EmailProcessor] ⚠️ No iCal backing for: ${fact.guest_name} (${fact.check_in}) code=${fact.confirmation_code}`);
+
+                const { error: insertError } = await supabase.from('enrichment_review_items').insert({
+                    workspace_id: workspaceId,
+                    connection_id: connectionId,
+                    extracted_data: {
+                        gmail_message_id: email.gmail_message_id,
+                        guest_name: fact.guest_name,
+                        check_in: fact.check_in,
+                        check_out: fact.check_out,
+                        guest_count: fact.guest_count,
+                        confirmation_code: fact.confirmation_code,
+                        listing_name: fact.listing_name
+                    },
+                    status: 'pending'
+                });
+
+                if (!insertError) {
+                    reviewItemsCreated++;
+                    existingGmailIds.add(email.gmail_message_id); // Track for idempotency within this run
+                    console.log(`[EmailProcessor] ✅ Created review item for ${fact.guest_name}`);
+                } else {
+                    console.error(`[EmailProcessor] Failed to create review item:`, insertError);
+                }
+
+            } catch (err) {
+                console.error(`[EmailProcessor] Error processing email ${email.gmail_message_id}:`, err);
+            }
+        }
+
+        console.log(`[EmailProcessor] Reprocess Complete: Scanned=${messagesScanned}, Parsed=${reservationsParsed}, Created=${reviewItemsCreated}, Skipped=${reviewItemsSkipped}`);
+        return {
+            messages_scanned: messagesScanned,
+            reservations_parsed: reservationsParsed,
+            review_items_created: reviewItemsCreated,
+            review_items_skipped: reviewItemsSkipped
+        };
     }
 
     static parseReservationEmail(bodyRaw: string, subject: string): ExtractedFact | null {

@@ -13,6 +13,7 @@ import { createCohostServiceClient } from '@/lib/supabase/cohostServer'
  * @returns workspace_id or null if creation failed
  */
 export async function ensureWorkspace(userId: string): Promise<string | null> {
+    console.log(`[ensureWorkspace] ====== WORKSPACE_FIX_V3 ====== userId: ${userId}`);
     const supabase = await createServerSupabaseClient()
 
     // First, try to get existing workspace
@@ -20,12 +21,17 @@ export async function ensureWorkspace(userId: string): Promise<string | null> {
         .from('cohost_workspace_members')
         .select('workspace_id')
         .eq('user_id', userId)
-        .single()
+        .limit(1)
+        .maybeSingle()
+
+    console.log(`[ensureWorkspace] Query result: workspace_id=${existingMember?.workspace_id}, error=${memberError?.message || 'none'}`);
 
     if (existingMember && !memberError) {
+        console.log(`[ensureWorkspace] RETURNING EXISTING workspace: ${existingMember.workspace_id}`);
         return existingMember.workspace_id
     }
 
+    console.log(`[ensureWorkspace] NO EXISTING WORKSPACE - WILL CREATE NEW ONE`);
     // No workspace found, create one
     // We need service role to bypass RLS for workspace creation
     const serviceClient = createCohostServiceClient()

@@ -1,14 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
+// Alias the standard client to avoid naming conflict
+import { createClient as createStandardClient } from '@/lib/supabase/server';
 import { getGoogleOAuthClient } from '@/lib/utils/google';
 import { GmailService } from '@/lib/services/gmail-service';
+import { revalidatePath } from 'next/cache';
 
 // Prevent caching for auth callback
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-    const supabase = await createClient();
+    let supabase;
+    try {
+        // 1. Try Service Role (Admin) for reliability
+        supabase = createCohostServiceClient();
+    } catch (e) {
+        console.warn('[GmailCallback] Service Role Key missing, falling back to user session client.');
+        // 2. Fallback to Standard User Session (RLS)
+        supabase = await createStandardClient();
+    }
+
     const searchParams = request.nextUrl.searchParams;
+
+    // VERSION MARKER - If you see this in logs, v2 callback is running
+    console.log('[GmailCallback] ====== V2 CALLBACK RUNNING ======');
 
     const code = searchParams.get('code');
     const connectionId = searchParams.get('state'); // We passed connectionId as state
@@ -65,7 +80,7 @@ export async function GET(request: NextRequest) {
             console.warn('[GmailCallback] WARNING: No refresh token returned. Relying on existing token if present.');
         }
 
-        // Update DB
+        // Update DB using Admin Client (Bypass RLS)
         const { error: dbError } = await supabase
             .from('connections')
             .update(updates)
@@ -79,11 +94,12 @@ export async function GET(request: NextRequest) {
         console.log('[GmailCallback] DB updated successfully. Verifying connection...');
 
         // Trigger Verification (Pass tokens directly to avoid race/refetch)
+        // Pass Admin Client to verifyConnection
         const verification = await GmailService.verifyConnection(connectionId, {
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
             expiry_date: tokens.expiry_date
-        });
+        }, supabase); // <--- Pass Admin Client
 
         if (!verification.success) {
             console.error('[GmailCallback] Verification Failed:', verification.error);

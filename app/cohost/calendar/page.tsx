@@ -32,9 +32,10 @@ type Booking = {
   status: 'confirmed' | 'pending';
   totalPrice: number;
   channel: Channel;
-  platform?: string;
+  platform?: string; // Human Readable (e.g. "Spark & Stay")
   platformName: string;
   needsReview: boolean;
+  sourceFeedId?: string;
 };
 
 // --- Constants ---
@@ -59,13 +60,6 @@ const CHANNEL_PRIORITY: Record<Channel, number> = {
   'airbnb': 2,
   'vrbo': 3,
   'other': 4
-};
-
-const CHANNEL_COLORS: Record<Channel, { bg: string, border: string, text: string }> = {
-  'direct': { bg: 'bg-emerald-100', border: 'border-emerald-300', text: 'text-emerald-900' },
-  'airbnb': { bg: 'bg-rose-100', border: 'border-rose-300', text: 'text-rose-900' },
-  'vrbo': { bg: 'bg-blue-100', border: 'border-blue-300', text: 'text-blue-900' },
-  'other': { bg: 'bg-gray-100', border: 'border-gray-300', text: 'text-gray-900' },
 };
 
 // --- Helpers ---
@@ -177,17 +171,41 @@ export default function CalendarPage() {
   // Data State
   const [properties, setProperties] = useState<Property[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [feedMap, setFeedMap] = useState<Record<string, string>>({}); // feed_id -> name
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [showDuplicates, setShowDuplicates] = useState(false);
 
   const dates = useMemo(() => getDatesInWindow(rangeStart, loadedDays), [rangeStart, loadedDays]);
 
-  // Initial Fetch (Properties + First 45 Days)
+  // Fetch Feeds Helper
+  const fetchFeeds = useCallback(async () => {
+    try {
+      const { data: feedsData } = await supabase
+        .from('ical_feeds')
+        .select('id, source_name, last_synced_at'); // Added last_synced_at per requirement
+
+      if (feedsData) {
+        const map: Record<string, string> = {};
+        feedsData.forEach(f => {
+          map[f.id] = f.source_name;
+        });
+        setFeedMap(map);
+      }
+    } catch (e) {
+      console.error('Error fetching feeds:', e);
+    }
+  }, [supabase]);
+
+  // Initial Fetch (Properties + Feeds + First 45 Days)
   const fetchInitialData = useCallback(async (startPoint: Date = TODAY) => {
     try {
       setLoading(true);
-      // 1. Fetch Properties (only if empty)
+
+      // 1. Fetch Feeds (Always fetch to ensure fresh identity/timestamp data)
+      await fetchFeeds();
+
+      // 2. Fetch Properties (only if empty)
       if (properties.length === 0) {
         const { data: propsData, error: propsError } = await supabase
           .from('cohost_properties')
@@ -203,7 +221,7 @@ export default function CalendarPage() {
         }));
         setProperties(mappedProps);
 
-        // 2. Fetch Initial Bookings
+        // 3. Fetch Initial Bookings
         if (mappedProps.length === 0) {
           setBookings([]);
           setLoading(false);
@@ -218,7 +236,7 @@ export default function CalendarPage() {
     } finally {
       setLoading(false);
     }
-  }, [supabase, properties.length]); // properties.length dependency to avoid re-fetching props
+  }, [supabase, properties.length, fetchFeeds]); // properties.length dependency to avoid re-fetching props
 
   // Fetch Bookings for a specific range and MERGE into state
   const fetchBookingsRange = async (start: Date, end: Date) => {
@@ -245,13 +263,14 @@ export default function CalendarPage() {
       status: (b.status === 'confirmed' || b.status === 'pending') ? b.status : 'confirmed',
       totalPrice: b.total_amount || 0,
       channel: (['direct', 'airbnb', 'vrbo'].includes(b.source_type) ? b.source_type : 'other') as Channel,
-      platform: b.platform || b.source_type,
+      platform: b.platform || b.source_type, // "Spark & Stay" etc.
       platformName: b.platform || b.source_type,
       guestName: b.guest_name || 'Guest',
       guestFirstName: b.guest_first_name,
       guestLastInitial: b.guest_last_initial,
       needsReview: b.needs_review || false,
-      guestCount: b.guest_count || 0
+      guestCount: b.guest_count || 0,
+      sourceFeedId: b.source_feed_id
     }));
 
     setBookings(prev => {
@@ -294,9 +313,26 @@ export default function CalendarPage() {
   const handleRefresh = async () => {
     if (properties.length === 0) return;
     setSyncing(true);
-    // Simple refresh: clear bookings and refetch current range
+
+    try {
+      // 1. Run GLOBAL reconciliation (syncs ALL feeds)
+      const refreshRes = await fetch('/api/cohost/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (refreshRes.ok) {
+        const refreshData = await refreshRes.json();
+        console.log(`[Calendar] Refresh complete: ${refreshData.calendar_stats?.feeds_synced || 0} feeds synced.`);
+      }
+    } catch (err) {
+      console.error('[Calendar] Refresh API error:', err);
+    }
+
+    // 2. Clear and refetch bookings from DB
     setBookings([]);
     setLoadedDays(45);
+    // Force re-fetch of feeds and bookings (properties check handled inside)
     await fetchInitialData(rangeStart);
     setSyncing(false);
   };
@@ -393,12 +429,6 @@ export default function CalendarPage() {
 
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
-
-            {/* Debug Stats (Requested by User) */}
-            <div className="hidden md:flex flex-col items-end text-[10px] text-gray-400 font-mono leading-tight mr-4">
-              <span>Loaded: {bookings.length}</span>
-              <span>Wind: {loadedDays}d</span>
-            </div>
 
             <Link
               href="/cohost/settings/calendar"
@@ -545,8 +575,15 @@ export default function CalendarPage() {
                     const { start, span, isVisible } = getGridPosition(booking, rangeStart, loadedDays);
                     if (!isVisible) return null;
 
-                    const colors = getPlatformColors(booking.platform);
+                    const colors = getPlatformColors(booking.platform || booking.channel);
                     const badgeLabel = getPlatformBadgeLabel(booking.platform);
+
+                    // Identity Display Logic
+                    // 1. Try to get Feed Name from map ("Spark & Stay")
+                    // 2. Fallback to Booking's stored Platform Name ("Airbnb")
+                    // 3. Fallback to Channel ("airbnb")
+                    const accountName = booking.sourceFeedId ? feedMap[booking.sourceFeedId] : null;
+                    const displayLabel = accountName || badgeLabel;
 
                     const getBookingState = (b: Booking) => {
                       const todayStr = toIso(TODAY);
@@ -585,7 +622,7 @@ export default function CalendarPage() {
                             </div>
                           )}
 
-                          <div className="flex flex-col min-w-0 w-full">
+                          <div className="flex flex-col min-w-0 w-full mb-0.5">
                             <div className="flex items-center justify-between gap-1">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <div className={`p-0.5 rounded-full bg-white/50 shrink-0`}>
@@ -607,17 +644,25 @@ export default function CalendarPage() {
                               )}
                             </div>
                             {!isDuplicate && (
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <span className={`text-[9px] px-1 py-0.5 rounded ${colors.badge}`}>
+                              <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                                {/* Platform Tag (Always Visible) */}
+                                <span className={`text-[9px] px-1 py-0 rounded ${colors.badge} shrink-0`}>
                                   {badgeLabel}
                                 </span>
+
+                                {/* Account Name (Optional, distinct from platform) */}
+                                {accountName && (
+                                  <span className="text-[9px] text-gray-500 truncate font-medium max-w-[80px]" title={accountName}>
+                                    {accountName}
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>
                         </div>
 
                         {/* Tooltip */}
-                        <div className={`absolute left-1/2 -translate-x-1/2 hidden group-hover:block z-50 min-w-[180px] ${rowIdx === 0 ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
+                        <div className={`absolute left-1/2 -translate-x-1/2 hidden group-hover:block z-50 min-w-[200px] ${rowIdx === 0 ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
                           <div className="bg-gray-900 text-white text-xs rounded-lg py-3 px-3 shadow-xl text-center ring-1 ring-white/10">
                             <div className="flex items-center justify-center gap-2 mb-2 border-b border-white/20 pb-2">
                               <span className="font-bold text-sm block">{booking.guestName}</span>
@@ -627,7 +672,12 @@ export default function CalendarPage() {
                               <p className="opacity-80 flex justify-between"><span>Check-in:</span> <span className="font-mono">{booking.startDate}</span></p>
                               <p className="opacity-80 flex justify-between"><span>Check-out:</span> <span className="font-mono">{booking.endDate}</span></p>
                               <p className="opacity-80 flex justify-between"><span>Guests:</span> <span>{booking.guestCount || '-'}</span></p>
-                              <p className="opacity-80 flex justify-between"><span>Source:</span> <span>{booking.platformName}</span></p>
+                              <div className="pt-1 mt-1 border-t border-white/10">
+                                <p className="opacity-80 flex justify-between"><span>Platform:</span> <span className="font-bold">{badgeLabel}</span></p>
+                                {accountName && (
+                                  <p className="opacity-80 flex justify-between"><span>Account:</span> <span className="text-gray-300">{accountName}</span></p>
+                                )}
+                              </div>
                             </div>
                           </div>
                           <div className={`w-2 h-2 bg-gray-900 transform rotate-45 mx-auto absolute left-0 right-0 ${rowIdx === 0 ? '-top-1' : '-bottom-1'}`}></div>

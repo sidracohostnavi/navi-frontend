@@ -196,6 +196,7 @@ function NewPropertyWizardInner() {
             const { data: membership } = await supabase.from('cohost_workspace_members')
                 .select('workspace_id')
                 .eq('user_id', user.id)
+                .limit(1)
                 .maybeSingle();
 
             membershipData = membership;
