@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { EmailProcessor } from '@/lib/services/email-processor';
+import { handleError, AppError } from '@/lib/utils/api-errors';
+import { acquireSyncLock, releaseSyncLock } from '@/lib/utils/sync-lock';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Allow 60s for full sync
@@ -12,13 +14,34 @@ export async function POST(
     const { id: connectionId } = await params;
     const supabase = await createClient();
 
+    // 0. BLAST RADIUS CONTROL: In-Memory Concurrency Lock
+    const hasLock = acquireSyncLock(connectionId);
+
+    // Check lock BEFORE try block to avoid releasing what we didn't acquire if we fail early
+    // But we need to respond with JSON.
+    // Ideally we throw AppError and let catch handle it, but catch needs `hasLock` context for finally.
+    // It's cleaner to check lock inside try/finally if possible, OR just handle rejection early.
+
+    if (!hasLock) {
+        // Return 409 immediately
+        const { status, response } = handleError(new AppError(
+            'Sync already in progress for this connection.',
+            'SYNC_IN_PROGRESS',
+            409,
+            'Please wait a moment before trying again.'
+        ), { connection_id: connectionId });
+        return NextResponse.json(response, { status });
+    }
+
+    const start = Date.now();
+
     try {
         console.log(`[Sync] Starting full sync for connection ${connectionId}`);
 
         // 1. Authenticate
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+            throw new AppError('Unauthorized', 'UNAUTHORIZED', 401);
         }
 
         // 2. Fetch connection to verify ownership
@@ -30,11 +53,19 @@ export async function POST(
             .single();
 
         if (connError || !connection) {
-            return NextResponse.json({ error: 'Connection not found' }, { status: 404 });
+            throw new AppError('Connection not found', 'CONNECTION_NOT_FOUND', 404);
         }
 
+        // Structured Start Log
+        console.log(JSON.stringify({
+            event: 'sync_run_start',
+            workspace_id: connection.workspace_id,
+            connection_id: connectionId,
+            provider: 'gmail'
+        }));
+
         if (!connection.gmail_refresh_token && !connection.gmail_access_token) {
-            return NextResponse.json({ error: 'Gmail not connected' }, { status: 400 });
+            throw new AppError('Gmail not connected', 'GMAIL_NOT_CONNECTED', 400);
         }
 
         // 3. STEP 1: Fetch & Parse New Emails
@@ -58,7 +89,7 @@ export async function POST(
             .eq('id', connectionId);
 
         // 6. Return Combined Stats
-        return NextResponse.json({
+        const responseData = {
             success: true,
             stats: {
                 emails_scanned: scanResults.length, // Newly parsed facts
@@ -66,15 +97,38 @@ export async function POST(
                 review_items_created: enrichmentResults.missing
             },
             message: `Sync Complete: ${scanResults.length} new emails processed, ${enrichmentResults.enriched} bookings enriched.`
-        });
+        };
+
+        // Structured End Log (Success)
+        console.log(JSON.stringify({
+            event: 'sync_run_end',
+            workspace_id: connection.workspace_id,
+            connection_id: connectionId,
+            outcome: 'success',
+            duration_ms: Date.now() - start,
+            stats: responseData.stats
+        }));
+
+        return NextResponse.json(responseData);
 
     } catch (err: any) {
         console.error('[Sync] Error:', err);
 
-        // Update connection status to error if it was a real failure (not just partial)
-        // But maybe we don't want to break the whole connection on temporary sync fail?
-        // Let's safe-guard: if it's an auth error or API error, maybe mark error.
+        // Structured End Log (Failure)
+        console.error(JSON.stringify({
+            event: 'sync_run_end',
+            connection_id: connectionId,
+            outcome: 'error',
+            duration_ms: Date.now() - start,
+            error_code: err instanceof AppError ? err.code : 'UNKNOWN'
+        }));
 
-        return NextResponse.json({ error: err.message }, { status: 500 });
+        // Use standardized error handler
+        const { status, response } = handleError(err, { connection_id: connectionId });
+
+        return NextResponse.json(response, { status });
+    } finally {
+        // ALWAYS release lock if we acquired it
+        releaseSyncLock(connectionId);
     }
 }

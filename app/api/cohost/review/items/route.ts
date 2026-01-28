@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { ensureWorkspace } from '@/lib/workspaces/ensureWorkspace';
 import { NextResponse } from 'next/server';
 
 /**
@@ -15,34 +16,29 @@ export async function GET() {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        console.log(`[ReviewItems] ====== WORKSPACE_FIX_V3 ====== User ID: ${user.id}`);
+        // 1. Get Single Source of Truth Workspace
+        const workspaceId = await ensureWorkspace(user.id);
 
-        // Get user's workspace via membership
-        const { data: membership } = await supabase
+        if (!workspaceId) {
+            console.error(`[ReviewItems] GUARDRAIL: No workspace found for user ${user.id}`);
+            return NextResponse.json({ error: 'No workspace found' }, { status: 403 }); // 403 Forbidden
+        }
+
+        // 2. Strict Membership Verification (Double Check)
+        // ensureWorkspace checks preference, but we want to be absolutely sure in the API boundary
+        const { data: membership, error: memberError } = await supabase
             .from('cohost_workspace_members')
-            .select('workspace_id')
+            .select('role')
             .eq('user_id', user.id)
-            .limit(1)
-            .maybeSingle();
+            .eq('workspace_id', workspaceId)
+            .single();
 
-        let workspaceId = membership?.workspace_id;
-        console.log(`[ReviewItems] Membership workspace: ${workspaceId || 'NONE'}`);
-
-        // Fallback: get workspace from bookings if no membership
-        if (!workspaceId) {
-            const { data: sampleBooking } = await supabase
-                .from('bookings')
-                .select('workspace_id')
-                .limit(1)
-                .single();
-            workspaceId = sampleBooking?.workspace_id;
-            console.log(`[ReviewItems] Fallback workspace from bookings: ${workspaceId || 'NONE'}`);
+        if (memberError || !membership) {
+            console.error(`[ReviewItems] GUARDRAIL: User ${user.id} attempting to access workspace ${workspaceId} without membership.`);
+            return NextResponse.json({ error: 'Forbidden: Not a member of this workspace' }, { status: 403 });
         }
 
-        if (!workspaceId) {
-            console.log(`[ReviewItems] No workspace found - returning empty`);
-            return NextResponse.json({ items: [] });
-        }
+        console.log(`[ReviewItems] ACCESS GRANTED: User ${user.id} -> Workspace ${workspaceId} (${membership.role})`);
 
         // Debug: count all items in DB for this workspace
         const { count: totalCount } = await supabase

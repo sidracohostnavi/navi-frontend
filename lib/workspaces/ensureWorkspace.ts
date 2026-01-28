@@ -13,10 +13,35 @@ import { createCohostServiceClient } from '@/lib/supabase/cohostServer'
  * @returns workspace_id or null if creation failed
  */
 export async function ensureWorkspace(userId: string): Promise<string | null> {
-    console.log(`[ensureWorkspace] ====== WORKSPACE_FIX_V3 ====== userId: ${userId}`);
+    console.log(`[ensureWorkspace] ====== GUARDRAILS_V1 ====== userId: ${userId}`);
     const supabase = await createServerSupabaseClient()
+    const serviceClient = createCohostServiceClient()
 
-    // First, try to get existing workspace
+    // 1. Check User Preference (Single Source of Truth)
+    const { data: pref } = await supabase
+        .from('cohost_user_preferences')
+        .select('workspace_id')
+        .eq('user_id', userId)
+        .single();
+
+    if (pref?.workspace_id) {
+        // Verify membership for this preferred workspace
+        const { data: member } = await supabase
+            .from('cohost_workspace_members')
+            .select('workspace_id')
+            .eq('user_id', userId)
+            .eq('workspace_id', pref.workspace_id)
+            .single();
+
+        if (member) {
+            console.log(`[ensureWorkspace] Verified preference: ${pref.workspace_id}`);
+            return pref.workspace_id;
+        } else {
+            console.warn(`[ensureWorkspace] Preference ${pref.workspace_id} invalid (no membership). tailored fallback.`);
+        }
+    }
+
+    // 2. Fallback: Find ANY valid membership
     const { data: existingMember, error: memberError } = await supabase
         .from('cohost_workspace_members')
         .select('workspace_id')
@@ -24,17 +49,23 @@ export async function ensureWorkspace(userId: string): Promise<string | null> {
         .limit(1)
         .maybeSingle()
 
-    console.log(`[ensureWorkspace] Query result: workspace_id=${existingMember?.workspace_id}, error=${memberError?.message || 'none'}`);
-
     if (existingMember && !memberError) {
-        console.log(`[ensureWorkspace] RETURNING EXISTING workspace: ${existingMember.workspace_id}`);
+        console.log(`[ensureWorkspace] Fallback found: ${existingMember.workspace_id}. Locking preference.`);
+
+        // LOCK IT: Upsert preference so next time we hit step 1
+        await serviceClient
+            .from('cohost_user_preferences')
+            .upsert({
+                user_id: userId,
+                workspace_id: existingMember.workspace_id,
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id' });
+
         return existingMember.workspace_id
     }
 
+    // 3. Create New Workspace
     console.log(`[ensureWorkspace] NO EXISTING WORKSPACE - WILL CREATE NEW ONE`);
-    // No workspace found, create one
-    // We need service role to bypass RLS for workspace creation
-    const serviceClient = createCohostServiceClient()
 
     // Get user email for workspace name
     const { data: { user } } = await supabase.auth.getUser()
@@ -76,5 +107,50 @@ export async function ensureWorkspace(userId: string): Promise<string | null> {
             automation_level: 1,
         })
 
+    // LOCK IT: Set preference
+    await serviceClient
+        .from('cohost_user_preferences')
+        .upsert({
+            user_id: userId,
+            workspace_id: workspace.id,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+
     return workspace.id
+}
+
+/**
+ * Explicitly sets the active workspace for a user.
+ * Call this when the user switches workspaces in the UI.
+ */
+export async function setActiveWorkspace(userId: string, workspaceId: string): Promise<boolean> {
+    const serviceClient = createCohostServiceClient();
+
+    // Verify membership first
+    const { data: member } = await serviceClient
+        .from('cohost_workspace_members')
+        .select('workspace_id')
+        .eq('user_id', userId)
+        .eq('workspace_id', workspaceId)
+        .single();
+
+    if (!member) {
+        console.error(`[setActiveWorkspace] User ${userId} is not a member of ${workspaceId}`);
+        return false;
+    }
+
+    const { error } = await serviceClient
+        .from('cohost_user_preferences')
+        .upsert({
+            user_id: userId,
+            workspace_id: workspaceId,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+
+    if (error) {
+        console.error('[setActiveWorkspace] Failed to update preference:', error);
+        return false;
+    }
+
+    return true;
 }

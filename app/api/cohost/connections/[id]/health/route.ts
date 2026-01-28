@@ -35,7 +35,30 @@ export async function GET(
         // We can infer validation from recent successful fetches in gmail_messages
         const gmailConnected = !!connection.gmail_refresh_token;
 
-        // 3. Check Label
+        // 3. Compute Granular Status
+        // Truth Table:
+        // DISCONNECTED = No tokens
+        // ERROR = Tokens exist but revoked/invalid (inferred from DB status or last error)
+        // INCOMPLETE = Tokens valid but Label missing/invalid
+        // READY = All good
+
+        let statusDetail = 'DISCONNECTED';
+        if (gmailConnected) {
+            if (connection.gmail_status === 'error') {
+                // Check code to differentiate Auth Error vs Config Error
+                const code = connection.gmail_last_error_code;
+                if (code === 'LABEL_NOT_FOUND' || code === 'LABEL_NOT_CONFIGURED') {
+                    statusDetail = 'AUTHENTICATED_INCOMPLETE';
+                } else {
+                    statusDetail = 'ERROR'; // Revoked, etc
+                }
+            } else {
+                statusDetail = 'READY';
+            }
+        }
+
+        // Double check config state live? 
+        // We rely on DB status mostly, but 'labelFound' check helps UI debugging
         const labelFound = !!connection.reservation_label;
 
         // 4. Calculate Stats (Live Counts)
@@ -154,9 +177,12 @@ export async function GET(
                 gmail_connected: gmailConnected,
                 label_found: labelFound,
                 label_name: connection.reservation_label,
+                status_detail: statusDetail, // New explicit status
+                gmail_status: connection.gmail_status, // Raw DB status
+                last_error: connection.gmail_last_error_message, // Expose error msg for UI to show tooltips
                 last_scan: lastMsg?.created_at || null,
                 stats,
-                errors: [] // We don't have an error log table anymore, so returning empty or we could query logs if they existed
+                errors: []
             }
         });
 

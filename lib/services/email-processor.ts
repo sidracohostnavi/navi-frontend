@@ -13,6 +13,8 @@ type ExtractedFact = {
     raw?: any;
 };
 
+import { AppError } from '@/lib/utils/api-errors';
+
 export class EmailProcessor {
     static async fetchGmailMessages(connectionId: string, label: string) {
         const supabase = await createClient();
@@ -144,6 +146,10 @@ export class EmailProcessor {
                 .single();
 
             const label = conn?.reservation_label || 'Airbnb';
+
+            // 0. PRE-FLIGHT: Label Conflict Check
+            await this.checkForLabelConflict(supabase, connectionId, label);
+
             msgsToProcess = await this.fetchGmailMessages(connectionId, label);
         }
 
@@ -155,51 +161,42 @@ export class EmailProcessor {
 
         for (const msg of msgsToProcess) {
             try {
-                // Check dupes
-                const { data: existing } = await supabase
+                // 1. ISOLATION & DEDUPE CHECK
+                // Check if this message exists ANYWHERE in the system
+                const { data: existingRows } = await supabase
                     .from('gmail_messages')
-                    .select('id')
-                    .eq('gmail_message_id', msg.id)
-                    .single();
+                    .select('connection_id')
+                    .eq('gmail_message_id', msg.id);
 
-                if (existing) {
-                    console.log(`[EmailProcessor] Skipping duplicate message ${msg.id}`);
-                    skipReasons['duplicate'] = (skipReasons['duplicate'] || 0) + 1;
-                    skippedCount++;
-                    continue;
+                if (existingRows && existingRows.length > 0) {
+                    // Check ownership
+                    const ownedByMe = existingRows.some(row => row.connection_id === connectionId);
+
+                    if (ownedByMe) {
+                        // Idempotency: I already processed it.
+                        console.log(`[EmailProcessor] Skipping duplicate message ${msg.id} (Idempotent)`);
+                        skipReasons['duplicate_self'] = (skipReasons['duplicate_self'] || 0) + 1;
+                        skippedCount++;
+                        continue;
+                    } else {
+                        // Isolation Violation: Someone else processed it!
+                        // Fail-Fast: Use explicit error formatting
+                        // HARD STOP
+                        throw new AppError(
+                            `Message ${msg.id} already processed by another connection.`,
+                            'CROSS_CONNECTION_MESSAGE_SEEN',
+                            409,
+                            'Check for duplicate connections sharing the same label in this workspace.',
+                            {
+                                gmail_message_id: msg.id,
+                                owner_connection_ids: existingRows.map(r => r.connection_id)
+                            }
+                        );
+                    }
                 }
 
-                // Parse (Anchored)
-                // We pass both HTML and Text if available. 
-                // Currently strictly relying on Text derived from HTML or Plain Text for regex anchors, 
-                // but might strip tags if needed. For now let's use the text version for regexing.
-                // If we have HTML, we might want to strip tags to get clean text for anchoring.
-                // A simple tag stripper:
-                const textToParse = msg.bodyHtml ?
-                    msg.bodyHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ')
-                    : msg.bodyText;
-
-                const fact = this.parseReservationEmail(textToParse, msg.subject);
-
-                if (!fact) {
-                    console.warn(`[EmailProcessor] Failed to parse message ${msg.id} (Not a reservation or parse error)`);
-                    skipReasons['parse_failed'] = (skipReasons['parse_failed'] || 0) + 1;
-                    skippedCount++;
-                    continue;
-                }
-
-                // Validate
-                const validationError = this.validateReservationFact(fact);
-                if (validationError) {
-                    console.warn(`[EmailProcessor] Validation failed for ${msg.id}: ${validationError}`);
-                    skipReasons['validation_failed'] = (skipReasons['validation_failed'] || 0) + 1;
-                    skippedCount++;
-                    continue;
-                }
-
-                parsedCount++;
-
-                // Store in gmail_messages
+                // 2. STORE RAW MESSAGE (Ingestion Source of Truth)
+                // We store the message *before* parsing so we never lose data.
                 const { error: msgError } = await supabase
                     .from('gmail_messages')
                     .insert({
@@ -217,10 +214,38 @@ export class EmailProcessor {
 
                 if (msgError) {
                     console.error(`[EmailProcessor] Error storing message ${msg.id}:`, msgError);
+                    // If we can't store the raw message, we shouldn't proceed with parsing logic 
+                    // to avoid "fact without message" (though fact schema separates them).
+                    // But mostly because of partial failure states.
+                    skipReasons['store_failed'] = (skipReasons['store_failed'] || 0) + 1;
                     continue;
                 }
 
-                // Store in reservation_facts if future/current
+                // 3. PARSE (Attempt to extract Reservation Facts)
+                const textToParse = msg.bodyHtml ?
+                    msg.bodyHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ')
+                    : msg.bodyText;
+
+                const fact = this.parseReservationEmail(textToParse, msg.subject);
+
+                if (!fact) {
+                    // It's saved in gmail_messages, but we couldn't parse facts.
+                    // This is fine. It might be a chat message or just hard to parse.
+                    console.log(`[EmailProcessor] Stored message ${msg.id} but could not parse facts (Subject: "${msg.subject}")`);
+                    parsedCount++; // We successfully "processed" (ingested) it.
+                    continue;
+                }
+
+                // Validate Fact
+                const validationError = this.validateReservationFact(fact);
+                if (validationError) {
+                    console.warn(`[EmailProcessor] Validation failed for ${msg.id}: ${validationError}`);
+                    // Still counted as processed/ingested.
+                    parsedCount++;
+                    continue;
+                }
+
+                // 4. STORE FACTS
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 const checkInDate = new Date(fact.check_in);
@@ -244,13 +269,20 @@ export class EmailProcessor {
                     if (factError) {
                         console.error(`[EmailProcessor] Error storing fact:`, factError);
                     } else {
+                        // Ensure we count facts if needed? 
+                        // Actually 'parsedCount' tracks ingestion.
+                        // results.push(fact) is useful for immediate return if caller needs it.
                         results.push(fact);
                     }
                 } else {
                     console.log(`[EmailProcessor] Parsed past reservation, storing msg but skipping facts table.`);
                 }
-
             } catch (err: any) {
+                // If it's a cross-connection violation, re-throw to abort
+                if (err instanceof AppError && err.code === 'CROSS_CONNECTION_MESSAGE_SEEN') {
+                    throw err;
+                }
+
                 console.error(`[EmailProcessor] Error processing message ${msg.id}:`, err);
                 skipReasons['error'] = (skipReasons['error'] || 0) + 1;
                 skippedCount++;
@@ -258,7 +290,64 @@ export class EmailProcessor {
         }
 
         console.log(`[EmailProcessor] Processing Summary: Parsed=${parsedCount}, Skipped=${skippedCount}`);
+
+        // Audit Log for Run
+        console.log(JSON.stringify({
+            event: 'gmail_ingest_run',
+            connection_id: connectionId,
+            messages_found: msgsToProcess.length,
+            messages_processed: parsedCount,
+            messages_skipped: skippedCount,
+            skip_reasons: skipReasons
+        }));
+
         return results;
+    }
+
+    /**
+     * Fail fast if another active connection in the same workspace uses the same label name.
+     */
+    private static async checkForLabelConflict(supabase: any, currentConnectionId: string, labelName: string) {
+        if (!labelName) return;
+
+        // 1. Get current connection's workspace
+        const { data: currentConn } = await supabase
+            .from('connections')
+            .select('workspace_id, user_id')
+            .eq('id', currentConnectionId)
+            .single();
+
+        if (!currentConn) return;
+
+        // 2. Find other active/connected connections in same workspace with same label
+        // Note: We check 'gmail_status' to ensure we only block active conflicts.
+        // We match strictly on name because that's what we use for fetching.
+        const { data: conflicts } = await supabase
+            .from('connections')
+            .select('id, user_id')
+            .eq('workspace_id', currentConn.workspace_id)
+            .eq('gmail_status', 'connected')
+            .neq('id', currentConnectionId)
+            .ilike('reservation_label', labelName); // case-insensitive match
+
+        if (conflicts && conflicts.length > 0) {
+            // Found conflict!
+            const conflictIds = conflicts.map((c: any) => c.id);
+            console.error(JSON.stringify({
+                event: 'label_isolation_violation',
+                violation: 'shared_label_config',
+                workspace_id: currentConn.workspace_id,
+                label_name: labelName,
+                connection_ids: [currentConnectionId, ...conflictIds]
+            }));
+
+            throw new AppError(
+                `Label "${labelName}" is already being used by another connection in this workspace.`,
+                'LABEL_CONFLICT',
+                409,
+                'Use a unique label for this property (e.g. "Airbnb - Prop A").'
+            );
+        }
     }
 
     private static validateReservationFact(fact: ExtractedFact): string | null {
@@ -661,7 +750,8 @@ export class EmailProcessor {
             const body = bodyRaw.replace(/\s+/g, ' ').trim();
 
             // 1. Is it a reservation?
-            if (!/Reservation confirmed|Booking confirmed/i.test(subject)) {
+            // Broaden to include Airbnb, VRBO, Lodgify, and direct booking patterns
+            if (!/Reservation|Booking|Confirmed/i.test(subject)) {
                 return null;
             }
 

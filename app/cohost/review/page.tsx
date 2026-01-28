@@ -49,25 +49,31 @@ export default function ReviewPage() {
         async function fetchItems() {
             try {
                 setLoading(true);
-                console.log('[ReviewPage] DIRECT FETCH: Starting...');
+                console.log('[ReviewPage] Fetching items via API (GUARDRAILS_V1)...');
 
-                // BYPASS: Direct fetch from Supabase to verify content
-                const { data, error } = await supabase
-                    .from('enrichment_review_items')
-                    .select('*')
-                    .order('created_at', { ascending: false });
+                const res = await fetch(`/api/cohost/review/items?_t=${Date.now()}`, {
+                    cache: 'no-store',
+                    headers: { 'Cache-Control': 'no-cache' }
+                });
 
-                console.log('[ReviewPage] DIRECT FETCH Result:', { data, error });
+                if (res.status === 403) {
+                    setMessage({ type: 'error', text: 'Access Denied: You are not a member of this workspace.' });
+                    setLoading(false);
+                    return;
+                }
 
-                if (error) {
-                    console.error('[ReviewPage] DIRECT FETCH Error:', error);
-                    setMessage({ type: 'error', text: `Fetch Error: ${error.message}` });
-                } else {
-                    console.log('[ReviewPage] DIRECT FETCH Count:', data?.length || 0);
-                    setItems(data || []);
+                const data = await res.json();
+                console.log('[ReviewPage] API Response:', data);
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                if (isMounted) {
+                    setItems(data.items || []);
                 }
             } catch (err: any) {
-                console.error('[ReviewPage] DIRECT FETCH Exception:', err);
+                console.error('[ReviewPage] API Error:', err);
                 setMessage({ type: 'error', text: err.message });
             } finally {
                 if (isMounted) setLoading(false);

@@ -56,42 +56,41 @@ export class GmailService {
             const labels = labelsRes.data.labels || [];
             const labelNames = labels.map(l => l.name).filter(Boolean) as string[];
 
-            // 4. Use configured label or default to 'Airbnb'
-            // BUGFIX: Trim whitespace from label names
-            const rawLabel = connection.reservation_label || 'Airbnb';
+            // 4. Use configured label
+            // STRICT MODE: No default fallback unless explicitly configured.
+            // If label is missing (null/empty string), marked as Error/Incomplete immediately.
+            const rawLabel = connection.reservation_label;
+
+            if (!rawLabel || !rawLabel.trim()) {
+                console.warn(`[GmailVerify] No label configured for connection ${connectionId}. Marking as incomplete.`);
+                await this.updateStatus(connectionId, 'error', 'LABEL_NOT_CONFIGURED', 'No Gmail label configured', supabase);
+                return { success: false, error: 'No label configured', code: 'LABEL_NOT_CONFIGURED' };
+            }
+
             const labelName = rawLabel.trim();
-            const labelSource = connection.reservation_label ? 'db' : 'default';
-            console.log(`[GmailVerify] Checking for label: "${labelName}" (source: ${labelSource})`);
+            console.log(`[GmailVerify] Verifying configured label: "${labelName}"`);
 
             const targetLabel = labels.find(l => l.name?.toLowerCase() === labelName.toLowerCase());
 
             if (!targetLabel) {
-                // PERMISSIVE FIX: Missing label should NOT break OAuth connection
-                // Log the issue but still mark as connected so user can fix label in settings
-                console.warn(`[GmailVerify] Label "${labelName}" NOT FOUND. Available: ${labelNames.join(', ')}`);
-                console.warn(`[GmailVerify] Marking connected anyway - user must fix label in settings.`);
-                // Don't save the bad label, just proceed
+                // STRICT MODE: Missing label = Error
+                console.error(`[GmailVerify] Label "${labelName}" NOT FOUND in Gmail account.`);
+                const availableMsg = `Available labels: ${labelNames.slice(0, 5).join(', ')}...`;
+
+                await this.updateStatus(connectionId, 'error', 'LABEL_NOT_FOUND', `Label "${labelName}" not found in Gmail. ${availableMsg}`, supabase);
+                return { success: false, error: `Label "${labelName}" not found`, code: 'LABEL_NOT_FOUND' };
             } else {
                 console.log(`[GmailVerify] ✅ Found label "${targetLabel.name}" for ${connectionId}`);
             }
 
-            // Save label logic: Only save if we found it OR if it's the user's explicit choice?
-            // If targetLabel found AND it was default, save it to DB
-            if (targetLabel && !connection.reservation_label) {
-                await supabase
-                    .from('connections')
-                    .update({ reservation_label: labelName })
-                    .eq('id', connectionId);
-            }
-
-            // Always mark connected if we got here (OAuth worked)
+            // Always mark connected if we got here (OAuth valid + Label valid)
             await this.updateStatus(connectionId, 'connected', undefined, undefined, supabase);
 
             return {
                 success: true,
                 email: accountEmail,
                 label: targetLabel?.name || null,
-                label_source: labelSource
+                label_source: 'db'
             };
 
         } catch (err: any) {
@@ -118,6 +117,16 @@ export class GmailService {
         supabaseClient?: any
     ) {
         const supabase = supabaseClient || await createClient();
+
+        // Audit Log
+        console.log(JSON.stringify({
+            event: 'connection_health',
+            connection_id: id,
+            status: status,
+            error_code: code || null,
+            reason: msg || null
+        }));
+
         await supabase.from('connections').update({
             gmail_status: status,
             gmail_last_error_code: code || null,
