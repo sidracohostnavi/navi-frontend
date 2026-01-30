@@ -12,6 +12,9 @@ import { revalidatePath } from 'next/cache'
  */
 export async function enableApp(workspaceId: string, appKey: string) {
     try {
+        const { enforceSupportReadOnly } = await import('@/lib/supabase/authServer')
+        await enforceSupportReadOnly()
+
         const supabase = await createServerSupabaseClient()
 
         // Insert or update the app status to enabled

@@ -52,7 +52,10 @@ export async function middleware(request: NextRequest) {
                 setAll(cookiesToSet) {
                     cookiesToSet.forEach(({ name, value, options }) => {
                         request.cookies.set(name, value)
-                        response.cookies.set(name, value, options)
+                        response.cookies.set(name, value, {
+                            ...options,
+                            secure: process.env.NODE_ENV === 'production',
+                        })
                     })
                 },
             },
@@ -62,8 +65,12 @@ export async function middleware(request: NextRequest) {
     // Check if user is authenticated
     const { data: { user }, error } = await supabase.auth.getUser()
 
+    // Debug logging
+    console.log(`Middleware: ${pathname}, Session: ${!!user}, Error: ${error?.message || 'none'}`)
+
     // If no user and not on a public route, redirect to login
     if (!user || error) {
+        console.log('Middleware: Redirecting to login')
         const redirectUrl = new URL('/auth/login', request.url)
         redirectUrl.searchParams.set('next', pathname)
         return NextResponse.redirect(redirectUrl)

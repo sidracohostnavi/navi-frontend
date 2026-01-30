@@ -237,6 +237,19 @@ export class ICalProcessor {
                 console.log(`[ICalProcessor] Successfully updated timestamp for feed ${feed.id}`);
             }
 
+            // Log to ical_sync_log
+            await supabase.from('ical_sync_log').insert({
+                property_id: feed.property_id,
+                channel: 'ical',
+                synced_at: new Date().toISOString(),
+                events_found: feedEventsFound,
+                events_created: totalUpdated, // Using processed_count as created (upserts)
+                events_updated: 0,
+                events_canceled: 0,
+                success: true,
+                error_message: null
+            });
+
             return {
                 feed_id: feed.id,
                 success: true,
@@ -260,6 +273,19 @@ export class ICalProcessor {
                 last_event_count: eventCount,
                 last_booking_count: 0
             }).eq('id', feed.id);
+
+            // Log to ical_sync_log (failure)
+            await supabase.from('ical_sync_log').insert({
+                property_id: feed.property_id,
+                channel: 'ical',
+                synced_at: new Date().toISOString(),
+                events_found: feedEventsFound,
+                events_created: 0,
+                events_updated: 0,
+                events_canceled: 0,
+                success: false,
+                error_message: syncError
+            });
 
             return {
                 feed_id: feed.id,

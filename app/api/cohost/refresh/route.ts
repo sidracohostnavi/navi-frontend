@@ -33,7 +33,7 @@ export async function POST() {
         }
         const workspaceId = membership.workspace_id;
 
-        // 2. Refresh Email Connections
+        // 2. Refresh Email Connections with enrichment_logs tracking
         const { data: connections } = await supabase
             .from('connections')
             .select('id')
@@ -45,12 +45,71 @@ export async function POST() {
 
         if (connections) {
             for (const conn of connections) {
+                const startTime = Date.now();
+                let logId: string | null = null;
+
                 try {
+                    // INSERT log row at start
+                    const { data: logRow } = await supabase
+                        .from('enrichment_logs')
+                        .insert({
+                            connection_id: conn.id,
+                            run_type: 'refresh',
+                            status: 'started',
+                            emails_processed: 0,
+                            bookings_updated: 0,
+                            details: JSON.stringify({ started_at: new Date().toISOString() })
+                        })
+                        .select('id')
+                        .single();
+
+                    if (logRow) logId = logRow.id;
+
+                    // Run enrichment
                     const enrichRes = await EmailProcessor.enrichBookings(conn.id);
+                    const reprocessRes = await EmailProcessor.reprocessGmailToReview(conn.id);
+
                     totalEnriched += enrichRes.enriched;
                     totalMissing += enrichRes.missing;
-                } catch (e) {
+                    totalReviewItems += reprocessRes.review_items_created;
+
+                    const durationMs = Date.now() - startTime;
+
+                    // UPDATE log row on success
+                    if (logId) {
+                        await supabase
+                            .from('enrichment_logs')
+                            .update({
+                                status: 'success',
+                                emails_processed: reprocessRes.messages_scanned,
+                                bookings_updated: enrichRes.enriched,
+                                details: JSON.stringify({
+                                    enriched: enrichRes.enriched,
+                                    missing_detected: enrichRes.missing,
+                                    review_items_created: reprocessRes.review_items_created,
+                                    reservations_parsed: reprocessRes.reservations_parsed,
+                                    duration_ms: durationMs
+                                })
+                            })
+                            .eq('id', logId);
+                    }
+
+                } catch (e: any) {
                     console.error(`[Refresh] Email error for ${conn.id}:`, e);
+
+                    // UPDATE log row on error
+                    if (logId) {
+                        await supabase
+                            .from('enrichment_logs')
+                            .update({
+                                status: 'error',
+                                details: JSON.stringify({
+                                    error: e.message,
+                                    duration_ms: Date.now() - startTime
+                                })
+                            })
+                            .eq('id', logId);
+                    }
                 }
             }
         }

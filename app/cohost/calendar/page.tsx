@@ -513,9 +513,9 @@ export default function CalendarPage() {
                 className={`sticky top-0 z-30 border-b border-r border-gray-100 flex flex-col justify-center items-center h-[60px] ${isToday ? 'bg-blue-50/80 text-blue-700 box-border border-b-blue-500' : 'bg-gray-50/95 text-gray-700'}`}
                 style={{ gridRow: '1', gridColumn: i + 2, height: HEADER_HEIGHT }}
               >
-                <div className="text-xs font-medium uppercase">{date.toLocaleDateString('en-US', { weekday: 'short' })}</div>
+                <div className="text-xs font-medium uppercase">{new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' }).format(date)}</div>
                 <div className={`text-sm font-bold mt-0.5 ${isToday ? 'bg-blue-600 text-white rounded-full w-7 h-7 flex items-center justify-center' : ''}`}>
-                  {date.getDate()}
+                  {new Intl.DateTimeFormat('en-US', { day: 'numeric', timeZone: 'UTC' }).format(date)}
                 </div>
               </div>
             );

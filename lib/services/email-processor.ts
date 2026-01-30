@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { getGoogleOAuthClient } from '@/lib/utils/google';
 import { google } from 'googleapis';
+import { classifyEmail } from '@/lib/services/email-classifier';
 
 type ExtractedFact = {
     check_in: string;
@@ -195,7 +196,15 @@ export class EmailProcessor {
                     }
                 }
 
-                // 2. STORE RAW MESSAGE (Ingestion Source of Truth)
+                // 2. CLASSIFY EMAIL (Deterministic Gate)
+                // Strip HTML for classification
+                const textForClassification = msg.bodyHtml ?
+                    msg.bodyHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, '\n').replace(/&nbsp;/g, ' ')
+                    : msg.bodyText;
+                const classification = classifyEmail(msg.subject, textForClassification);
+                console.log(`[EmailProcessor] Classification: ${msg.id} -> ${classification.message_type} (candidate=${classification.is_reservation_candidate})`);
+
+                // 3. STORE RAW MESSAGE (Ingestion Source of Truth)
                 // We store the message *before* parsing so we never lose data.
                 const { error: msgError } = await supabase
                     .from('gmail_messages')
@@ -207,7 +216,8 @@ export class EmailProcessor {
                         raw_metadata: {
                             full_text: msg.bodyText,
                             full_html: msg.bodyHtml, // Storing HTML for future debugging
-                            original_msg: msg // Keep everything just in case
+                            original_msg: msg, // Keep everything just in case
+                            classification // NEW: Store classification result
                         },
                         processed_at: new Date().toISOString()
                     });
@@ -546,41 +556,36 @@ export class EmailProcessor {
         console.log(`[EmailProcessor] ========== REPROCESS GMAIL TO REVIEW ==========`);
         console.log(`[EmailProcessor] Connection ID: ${connectionId}`);
 
-        // 1. Fetch workspace_id via connection -> user_id -> workspace membership
-        const { data: connection } = await supabase
+        // 1. Fetch workspace_id DIRECTLY from connection (INVARIANT: connection owns workspace)
+        const { data: connection, error: connError } = await supabase
             .from('connections')
-            .select('user_id')
+            .select('workspace_id')
             .eq('id', connectionId)
             .single();
 
-        if (!connection?.user_id) {
-            console.warn(`[EmailProcessor] No user found for connection ${connectionId}`);
-            return { messages_scanned: 0, reservations_parsed: 0, review_items_created: 0, review_items_skipped: 0 };
+        if (connError || !connection) {
+            console.error(`[EmailProcessor] Connection not found: ${connectionId}`);
+            throw new AppError(
+                `Connection ${connectionId} not found`,
+                'CONNECTION_NOT_FOUND',
+                404
+            );
         }
 
-        // Look up workspace from user membership
-        const { data: membership } = await supabase
-            .from('cohost_workspace_members')
-            .select('workspace_id')
-            .eq('user_id', connection.user_id)
-            .limit(1)
-            .maybeSingle();
+        const workspaceId = connection.workspace_id;
 
-        // Fallback: get workspace from existing bookings if no membership
-        let workspaceId = membership?.workspace_id;
+        // HARD GUARD: Reject if connection has no workspace_id
         if (!workspaceId) {
-            const { data: sampleBooking } = await supabase
-                .from('bookings')
-                .select('workspace_id')
-                .limit(1)
-                .single();
-            workspaceId = sampleBooking?.workspace_id;
+            console.error(`[EmailProcessor] Connection ${connectionId} has no workspace_id - cannot proceed`);
+            throw new AppError(
+                `Connection ${connectionId} has no workspace_id. Cannot create review items without workspace context.`,
+                'CONNECTION_MISSING_WORKSPACE',
+                400,
+                'Ensure the connection is properly associated with a workspace before processing emails.'
+            );
         }
 
-        if (!workspaceId) {
-            console.warn(`[EmailProcessor] No workspace found for connection ${connectionId}`);
-            return { messages_scanned: 0, reservations_parsed: 0, review_items_created: 0, review_items_skipped: 0 };
-        }
+        console.log(`[EmailProcessor] Using workspace_id=${workspaceId} from connection`);
 
         // 2. Fetch ALL stored Gmail messages - NO FILTER on processed_at
         const { data: emails, error: emailError } = await supabase
@@ -639,8 +644,18 @@ export class EmailProcessor {
             messagesScanned++;
 
             try {
-                // Prepare body for parsing
+                // RESERVATION CANDIDATE GATE
+                // Check classification before any calendar matching
                 const raw = email.raw_metadata || {};
+                const classification = raw.classification;
+
+                if (!classification?.is_reservation_candidate) {
+                    // NOT a reservation candidate - skip calendar matching and review item creation
+                    console.log(`[EmailProcessor] Skipping ${email.gmail_message_id}: ${classification?.message_type || 'unclassified'} (candidate=false)`);
+                    continue;
+                }
+
+                // Prepare body for parsing
                 let bodyToParse = '';
                 if (raw.full_html) {
                     bodyToParse = raw.full_html

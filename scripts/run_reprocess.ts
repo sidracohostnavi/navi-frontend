@@ -19,19 +19,27 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 async function reprocess() {
     console.log("🚀 Starting Gmail to Review Reprocess...\n");
 
-    // Find workspace from bookings table (most reliable)
-    const { data: sampleBooking } = await supabase
-        .from('bookings')
-        .select('workspace_id')
-        .limit(1)
-        .single();
+    // Cache for connection -> workspace_id lookup
+    const connectionWorkspaceCache = new Map<string, string>();
 
-    const workspaceId = sampleBooking?.workspace_id;
-    if (!workspaceId) {
-        console.error("❌ Could not find workspace from bookings");
-        return;
+    // Helper to get workspace_id from connection
+    async function getWorkspaceForConnection(connectionId: string): Promise<string | null> {
+        if (connectionWorkspaceCache.has(connectionId)) {
+            return connectionWorkspaceCache.get(connectionId)!;
+        }
+
+        const { data: conn } = await supabase
+            .from('connections')
+            .select('workspace_id')
+            .eq('id', connectionId)
+            .single();
+
+        const wsId = conn?.workspace_id || null;
+        if (wsId) {
+            connectionWorkspaceCache.set(connectionId, wsId);
+        }
+        return wsId;
     }
-    console.log(`Using workspace: ${workspaceId}\n`);
 
     // 1. Get ALL gmail_messages (regardless of connection)
     const { data: emails, error: emailError } = await supabase
@@ -47,20 +55,29 @@ async function reprocess() {
 
     if (!emails || emails.length === 0) return;
 
-    // 2. Fetch iCal-backed bookings
-    const { data: icalBookings } = await supabase
-        .from('bookings')
-        .select('id, check_in, check_out, reservation_code, source_feed_id, external_uid')
-        .eq('workspace_id', workspaceId)
-        .not('source_feed_id', 'is', null);
+    // We need to look up iCal bookings per workspace, so we'll cache them
+    const workspaceIcalCache = new Map<string, any[]>();
 
-    console.log(`Found ${icalBookings?.length || 0} iCal-backed bookings`);
+    async function getIcalBookingsForWorkspace(wsId: string): Promise<any[]> {
+        if (workspaceIcalCache.has(wsId)) {
+            return workspaceIcalCache.get(wsId)!;
+        }
 
-    // 3. Fetch existing review items
+        const { data: bookings } = await supabase
+            .from('bookings')
+            .select('id, check_in, check_out, reservation_code, source_feed_id, external_uid')
+            .eq('workspace_id', wsId)
+            .not('source_feed_id', 'is', null);
+
+        const result = bookings || [];
+        workspaceIcalCache.set(wsId, result);
+        return result;
+    }
+
+    // 3. Fetch existing review items (per workspace, we'll check per item)
     const { data: existingReviews } = await supabase
         .from('enrichment_review_items')
-        .select('id, extracted_data')
-        .eq('workspace_id', workspaceId);
+        .select('id, extracted_data');
 
     const existingGmailIds = new Set<string>();
     if (existingReviews) {
@@ -76,6 +93,7 @@ async function reprocess() {
     let created = 0;
     let skipped = 0;
     let hasIcal = 0;
+    let noWorkspace = 0;
 
     for (const email of emails) {
         // Parse subject for reservation
@@ -116,16 +134,27 @@ async function reprocess() {
         parsed++;
         console.log(`📧 ${guestName} | ${checkIn} | code=${confirmationCode || 'N/A'}`);
 
+        // Get workspace_id from connection (INVARIANT)
+        const workspaceId = await getWorkspaceForConnection(email.connection_id);
+        if (!workspaceId) {
+            console.log(`   ⚠️ Connection ${email.connection_id} has no workspace_id - skipping`);
+            noWorkspace++;
+            continue;
+        }
+
+        // Get iCal bookings for this workspace
+        const icalBookings = await getIcalBookingsForWorkspace(workspaceId);
+
         // Check for iCal match
         let hasMatch = false;
         if (icalBookings && confirmationCode) {
-            hasMatch = icalBookings.some(b =>
+            hasMatch = icalBookings.some((b: any) =>
                 b.reservation_code === confirmationCode ||
                 (b.external_uid && b.external_uid.includes(confirmationCode))
             );
         }
         if (!hasMatch && icalBookings && checkIn) {
-            hasMatch = icalBookings.some(b => {
+            hasMatch = icalBookings.some((b: any) => {
                 const bIn = new Date(b.check_in).toISOString().split('T')[0];
                 return bIn === checkIn;
             });
@@ -144,7 +173,7 @@ async function reprocess() {
             continue;
         }
 
-        // Insert review item - CORRECT SCHEMA: id, workspace_id, connection_id, extracted_data, status
+        // Insert review item - workspace_id from connection (INVARIANT)
         const { error: insertError } = await supabase
             .from('enrichment_review_items')
             .insert({
@@ -173,6 +202,7 @@ async function reprocess() {
     console.log(`Reservations parsed: ${parsed}`);
     console.log(`Has iCal backing: ${hasIcal}`);
     console.log(`Already in review: ${skipped}`);
+    console.log(`No workspace on connection: ${noWorkspace}`);
     console.log(`Review items created: ${created}`);
 
     // Final count

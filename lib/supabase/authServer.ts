@@ -22,7 +22,10 @@ export async function createServerSupabaseClient() {
         setAll(cookiesToSet) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, {
+                ...options,
+                secure: process.env.NODE_ENV === 'production',
+              })
             )
           } catch {
             // Called from Server Component
@@ -45,8 +48,40 @@ export async function getCurrentUser() {
   return user
 }
 
+// Helper to check if support mode is active and authorized
+async function getSupportModeWorkspace(userId: string): Promise<string | null> {
+  const cookieStore = await cookies()
+  const supportMode = cookieStore.get('support_mode')?.value === 'true'
+  const activeWorkspaceId = cookieStore.get('active_workspace_id')?.value
+
+  if (!supportMode || !activeWorkspaceId) {
+    return null
+  }
+
+  // Double check authorization (server-side enforcement)
+  const supabase = await createServerSupabaseClient()
+  const { data: { user }, error } = await supabase.auth.getUser()
+
+  if (error || !user || user.id !== userId) {
+    return null
+  }
+
+  const allowedEmails = (process.env.DEV_SUPPORT_EMAILS || '').split(',').map(e => e.trim().toLowerCase())
+  if (!user.email || !allowedEmails.includes(user.email.toLowerCase())) {
+    return null
+  }
+
+  return activeWorkspaceId
+}
+
 // Get user's workspace ID
 export async function getUserWorkspaceId(userId: string): Promise<string | null> {
+  // 1. Check for support mode override first
+  const supportWorkspaceId = await getSupportModeWorkspace(userId)
+  if (supportWorkspaceId) {
+    return supportWorkspaceId
+  }
+
   const supabase = await createServerSupabaseClient()
 
   // Get user's workspace membership
@@ -75,4 +110,15 @@ export async function getCurrentUserWithWorkspace() {
   const workspaceId = await getUserWorkspaceId(user.id)
 
   return { user, workspaceId }
+}
+
+// Check if support mode is active and ENFORCE read-only
+// Use this in mutation endpoints to block writes
+export async function enforceSupportReadOnly() {
+  const cookieStore = await cookies()
+  const supportMode = cookieStore.get('support_mode')?.value === 'true'
+
+  if (supportMode) {
+    throw new Error('Action blocked: Read-Only Support Mode Active')
+  }
 }
