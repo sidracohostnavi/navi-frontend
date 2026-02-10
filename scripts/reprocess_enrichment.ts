@@ -101,7 +101,7 @@ async function reprocess() {
             continue;
         }
 
-        newFact.guest_count = Math.floor(newFact.guest_count) || 1;
+        newFact.guest_count = Math.floor(newFact.guest_count ?? 1) || 1;
         parsed_ok++;
 
         // Update Fact
@@ -213,8 +213,9 @@ async function reprocess() {
 
             // Proceed to update...
 
-            const firstName = newFact.guest_name.split(' ')[0];
-            const lastInitial = newFact.guest_name.split(' ').length > 1 ? newFact.guest_name.split(' ').pop()?.replace('.', '') : '';
+            const guestName = newFact.guest_name || 'Guest';
+            const firstName = guestName.split(' ')[0];
+            const lastInitial = guestName.split(' ').length > 1 ? guestName.split(' ').pop()?.replace('.', '') : '';
             const displayName = `${firstName} ${lastInitial ? lastInitial + '.' : ''}`;
 
             await supabase
