@@ -3,6 +3,7 @@ import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
 // Alias the standard client to avoid naming conflict
 import { createClient as createStandardClient } from '@/lib/supabase/server';
 import { getGoogleOAuthClient } from '@/lib/utils/google';
+import { google } from 'googleapis';
 import { GmailService } from '@/lib/services/gmail-service';
 import { ensureWorkspace } from '@/lib/workspaces/ensureWorkspace';
 
@@ -135,11 +136,48 @@ export async function GET(request: NextRequest) {
             console.warn('[GmailCallback] WARNING: No refresh_token in response. This may happen if user previously authorized.');
         }
 
+        // 2a. IDENTITY VERIFICATION: Get Google profile email and verify it matches
+        oauth2Client.setCredentials({
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token
+        });
+
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+        const profileRes = await gmail.users.getProfile({ userId: 'me' });
+        const googleEmail = profileRes.data.emailAddress;
+
+        if (!googleEmail) {
+            console.error('[GmailCallback] Could not retrieve Google account email');
+            throw new Error('Could not verify Google account identity');
+        }
+
+        console.log('[GmailCallback] Google account email:', googleEmail);
+
+        // Fetch existing connection to check if gmail_account_email is already set
+        const { data: existingConn } = await adminSupabase
+            .from('connections')
+            .select('gmail_account_email, name')
+            .eq('id', connectionId)
+            .single();
+
+        // If connection already has a Gmail account linked, verify it's the same
+        if (existingConn?.gmail_account_email && existingConn.gmail_account_email !== googleEmail) {
+            console.error(JSON.stringify({
+                event: 'gmail_oauth_account_mismatch',
+                connection_id: connectionId,
+                expected_email: existingConn.gmail_account_email,
+                received_email: googleEmail
+            }));
+            const errorMsg = `Wrong Google account. This connection is tied to ${existingConn.gmail_account_email}. Please use the same account.`;
+            return NextResponse.redirect(new URL(`${baseUrl}?result=error&message=${encodeURIComponent(errorMsg)}`, request.url));
+        }
+
         const updates: any = {
             gmail_scopes: typeof tokens.scope === 'string' ? [tokens.scope] : (Array.isArray(tokens.scope) ? tokens.scope : []),
             gmail_access_token: tokens.access_token,
             gmail_token_expires_at: tokens.expiry_date,
-            gmail_connected_at: new Date().toISOString()
+            gmail_connected_at: new Date().toISOString(),
+            gmail_account_email: googleEmail  // Always store/update the verified email
         };
 
         if (tokens.refresh_token) {
@@ -183,7 +221,8 @@ export async function GET(request: NextRequest) {
             outcome: 'success'
         }));
 
-        return NextResponse.redirect(new URL(`${baseUrl}?result=success`, request.url));
+        // Redirect with connection_id so frontend can auto-open edit modal for label selection
+        return NextResponse.redirect(new URL(`${baseUrl}?result=success&connection_id=${connectionId}`, request.url));
 
     } catch (err: any) {
         console.error('[GmailCallback] Exchange/Process Error:', err);

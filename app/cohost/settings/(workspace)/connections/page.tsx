@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
 type Property = {
@@ -21,11 +22,12 @@ type Connection = {
     mapped_properties_count?: number;
     mapped_property_ids?: string[];
     gmail_connected_at?: string | null;
-    gmail_status?: 'connected' | 'error' | 'pending' | null;
+    gmail_status?: 'connected' | 'error' | 'pending' | 'needs_reconnect' | 'disconnected' | null;
     gmail_last_error_code?: string | null;
     gmail_last_error_message?: string | null;
     gmail_last_verified_at?: string | null;
-    last_synced_at?: string | null; // Derived from gmail_last_verified_at
+    last_synced_at?: string | null;
+    color?: string | null;
     last_enrichment?: {
         created_at: string;
         status: string;
@@ -35,17 +37,35 @@ type Connection = {
 
 export default function ConnectionsSettingsPage() {
     const supabase = createClient();
+    const searchParams = useSearchParams();
+    const router = useRouter();
 
     // State
     const [loading, setLoading] = useState(true);
     const [connections, setConnections] = useState<Connection[]>([]);
     const [properties, setProperties] = useState<Property[]>([]);
+    // Track connection to auto-open after OAuth redirect
+    const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
 
     // Action State
     const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
     const [actionLoading, setActionLoading] = useState(false);
     const [gmailLabels, setGmailLabels] = useState<{ id: string; name: string }[]>([]);
     const [selectedLabel, setSelectedLabel] = useState<string>('');
+    const [labelsLoading, setLabelsLoading] = useState(false);
+    const [labelsError, setLabelsError] = useState<string | null>(null);
+    const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
+
+    // Toast notification state
+    const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; message: string; details?: string } | null>(null);
+
+    // Auto-dismiss toast after 6 seconds
+    useEffect(() => {
+        if (toast) {
+            const timer = setTimeout(() => setToast(null), 6000);
+            return () => clearTimeout(timer);
+        }
+    }, [toast]);
 
     const handleSync = async (connectionId: string) => {
         setSyncingIds(prev => {
@@ -61,13 +81,64 @@ export default function ConnectionsSettingsPage() {
             const data = await res.json();
 
             if (res.ok && data.success) {
-                alert(data.message);
+                const stats = data.stats || {};
+                const emailsProcessed = stats.emails_scanned || 0;
+                const bookingsEnriched = stats.bookings_enriched || 0;
+                const reviewItems = stats.review_items_created || 0;
+
+                // Show detailed sync results
+                if (emailsProcessed === 0 && bookingsEnriched === 0) {
+                    setToast({
+                        type: 'info',
+                        message: 'Sync complete - no new emails',
+                        details: 'All emails are already processed. No updates needed.'
+                    });
+                } else {
+                    setToast({
+                        type: 'success',
+                        message: `Sync complete: ${emailsProcessed} emails processed`,
+                        details: `${bookingsEnriched} bookings enriched${reviewItems > 0 ? `, ${reviewItems} review items created` : ''}`
+                    });
+                }
                 fetchData();
             } else {
-                alert(`Sync failed: ${data.error}`);
+                // Check for specific error types
+                const errorCode = data.code || '';
+                const isRateLimit = errorCode === 'RATE_LIMITED' || data.error?.includes('rate') || data.error?.includes('quota');
+                const isNeedsReconnect = errorCode === 'NEEDS_RECONNECT' || data.error?.includes('token') || data.error?.includes('expired');
+
+                if (isRateLimit) {
+                    setToast({
+                        type: 'warning',
+                        message: '⚠️ Rate limit reached',
+                        details: 'Gmail API quota exceeded. Please wait a few minutes and try again.'
+                    });
+                } else if (isNeedsReconnect) {
+                    setToast({
+                        type: 'error',
+                        message: '🔄 Gmail reconnection required',
+                        details: 'Your Gmail access has expired. Click Reconnect to restore sync.'
+                    });
+                    // Update local state to show needs_reconnect
+                    setConnections(prev => prev.map(c =>
+                        c.id === connectionId
+                            ? { ...c, gmail_status: 'needs_reconnect' as const }
+                            : c
+                    ));
+                } else {
+                    setToast({
+                        type: 'error',
+                        message: 'Sync failed',
+                        details: data.error || data.message || 'Unknown error'
+                    });
+                }
             }
         } catch (err: any) {
-            alert('Error: ' + err.message);
+            setToast({
+                type: 'error',
+                message: 'Sync error',
+                details: err.message || 'Network error occurred'
+            });
         } finally {
             setSyncingIds(prev => {
                 const next = new Set(prev);
@@ -83,14 +154,26 @@ export default function ConnectionsSettingsPage() {
     };
 
     const fetchGmailLabels = async (connectionId: string) => {
+        setLabelsLoading(true);
+        setLabelsError(null);
         try {
             const res = await fetch(`/api/cohost/connections/${connectionId}/gmail/labels`);
+            const data = await res.json();
+
             if (res.ok) {
-                const data = await res.json();
                 setGmailLabels(data.labels || []);
+            } else if (data.needsReconnect || data.code === 'NEEDS_RECONNECT') {
+                setLabelsError('Gmail access expired. Please reconnect.');
+                // Refresh to show updated status
+                fetchData();
+            } else {
+                setLabelsError(data.error || 'Failed to load labels');
             }
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to fetch labels:', err);
+            setLabelsError('Failed to load labels: ' + err.message);
+        } finally {
+            setLabelsLoading(false);
         }
     };
 
@@ -102,17 +185,26 @@ export default function ConnectionsSettingsPage() {
 
         setActionLoading(true);
         try {
+            // Find the selected label object to get both id and name
+            const labelObj = gmailLabels.find(l => l.name === selectedLabel);
+            if (!labelObj) {
+                alert('Label not found');
+                return;
+            }
+
             const res = await fetch(`/api/cohost/connections/${connectionId}/gmail/labels`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ label_name: selectedLabel })
+                body: JSON.stringify({ label_id: labelObj.id, label_name: labelObj.name })
             });
 
             const data = await res.json();
 
             if (res.ok && data.success) {
-                alert(`✅ Label saved and verified!`);
-                fetchData(); // Refresh connections
+                // Update local form state so modal reflects the change immediately
+                setFormData(prev => ({ ...prev, reservation_label: labelObj.name }));
+                alert(`✅ Label "${labelObj.name}" saved successfully!`);
+                fetchData(); // Refresh connections list
                 setGmailLabels([]);
                 setSelectedLabel('');
             } else {
@@ -125,9 +217,9 @@ export default function ConnectionsSettingsPage() {
         }
     };
 
-    // Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
+    const [editingConnection, setEditingConnection] = useState<Connection | null>(null);
     const [formData, setFormData] = useState<{
         platform: 'airbnb' | 'vrbo' | 'booking' | 'pms';
         name: string;
@@ -135,13 +227,15 @@ export default function ConnectionsSettingsPage() {
         notes: string;
         reservation_label: string;
         selected_property_ids: string[];
+        color: string;
     }>({
         platform: 'airbnb',
         name: '',
         display_email: '',
         notes: '',
         reservation_label: '',
-        selected_property_ids: []
+        selected_property_ids: [],
+        color: ''
     });
 
     // Fetch Initial Data
@@ -149,13 +243,39 @@ export default function ConnectionsSettingsPage() {
         fetchData();
     }, []);
 
+    // Handle OAuth redirect - auto-open edit modal for label selection
+    useEffect(() => {
+        const result = searchParams.get('result');
+        const connectionId = searchParams.get('connection_id');
+
+        if (result === 'success' && connectionId) {
+            setPendingConnectionId(connectionId);
+            // Clean up URL params
+            router.replace('/cohost/settings/connections', { scroll: false });
+        }
+    }, [searchParams, router]);
+
+    // Auto-open modal when pendingConnectionId is set and connections are loaded
+    useEffect(() => {
+        if (pendingConnectionId && !loading && connections.length > 0) {
+            const connection = connections.find(c => c.id === pendingConnectionId);
+            if (connection) {
+                handleOpenModal(connection);
+                // Auto-load labels since Gmail was just connected
+                fetchGmailLabels(pendingConnectionId);
+            }
+            setPendingConnectionId(null);
+        }
+    }, [pendingConnectionId, loading, connections]);
+
     const fetchData = async () => {
         setLoading(true);
         try {
-            // 1. Fetch Connections
+            // 1. Fetch Connections (exclude archived)
             const { data: cxData, error: cxError } = await supabase
                 .from('connections')
                 .select('*')
+                .is('archived_at', null)  // Exclude soft-deleted connections
                 .order('created_at', { ascending: false });
 
             if (cxError) throw cxError;
@@ -200,6 +320,9 @@ export default function ConnectionsSettingsPage() {
 
             setConnections(mergedConnections);
 
+            // Proactively verify all 'connected' connections
+            healthCheckConnections(mergedConnections);
+
         } catch (error: any) {
             console.error('Error fetching connections:', error);
             // Don't alert on log fetch fail, just degrade gracefully
@@ -208,26 +331,77 @@ export default function ConnectionsSettingsPage() {
         }
     };
 
+    // Health check: verify each 'connected' connection actually works
+    const healthCheckConnections = async (connectionsToCheck: Connection[]) => {
+        const connectedConnections = connectionsToCheck.filter(
+            cx => cx.gmail_status === 'connected'
+        );
+
+        if (connectedConnections.length === 0) return;
+
+        // Mark all as verifying
+        setVerifyingIds(new Set(connectedConnections.map(cx => cx.id)));
+
+        // Check each connection in parallel (but update UI as each completes)
+        for (const cx of connectedConnections) {
+            try {
+                const res = await fetch(`/api/cohost/connections/${cx.id}/gmail/labels`);
+                const data = await res.json();
+
+                // If connection needs reconnect, update local state immediately
+                if (!res.ok && (data.needsReconnect || data.code === 'NEEDS_RECONNECT')) {
+                    setConnections(prev => prev.map(c =>
+                        c.id === cx.id
+                            ? { ...c, gmail_status: 'needs_reconnect' as const }
+                            : c
+                    ));
+                }
+            } catch (err) {
+                console.error(`[HealthCheck] Failed for ${cx.name}:`, err);
+            } finally {
+                // Remove from verifying set
+                setVerifyingIds(prev => {
+                    const next = new Set(prev);
+                    next.delete(cx.id);
+                    return next;
+                });
+            }
+        }
+    };
+
     const handleOpenModal = (cx?: Connection) => {
+        // Clear previous label state
+        setGmailLabels([]);
+        setSelectedLabel('');
+        setLabelsError(null);
+
         if (cx) {
             setEditingId(cx.id);
+            setEditingConnection(cx);
             setFormData({
                 platform: cx.platform,
                 name: cx.name || '',
                 display_email: cx.display_email || '',
                 notes: cx.notes || '',
                 reservation_label: cx.reservation_label || '',
-                selected_property_ids: cx.mapped_property_ids || []
+                selected_property_ids: cx.mapped_property_ids || [],
+                color: cx.color || ''
             });
+            // Auto-fetch Gmail labels if connection has Gmail connected
+            if (cx.gmail_status === 'connected') {
+                fetchGmailLabels(cx.id);
+            }
         } else {
             setEditingId(null);
+            setEditingConnection(null);
             setFormData({
                 platform: 'airbnb',
                 name: '',
                 display_email: '',
                 notes: '',
                 reservation_label: '',
-                selected_property_ids: []
+                selected_property_ids: [],
+                color: ''
             });
         }
         setIsModalOpen(true);
@@ -246,7 +420,7 @@ export default function ConnectionsSettingsPage() {
             let connectionId = editingId;
 
             if (editingId) {
-                // UPDATE
+                // UPDATE - Note: reservation_label/gmail_label_* are managed via Save Label flow
                 const { error } = await supabase
                     .from('connections')
                     .update({
@@ -254,7 +428,8 @@ export default function ConnectionsSettingsPage() {
                         name: formData.name,
                         display_email: formData.display_email,
                         notes: formData.notes,
-                        reservation_label: formData.reservation_label || null
+                        color: formData.color || null
+                        // DO NOT include reservation_label here - it's managed via handleSaveLabel
                     })
                     .eq('id', editingId);
                 if (error) throw error;
@@ -268,7 +443,8 @@ export default function ConnectionsSettingsPage() {
                         name: formData.name,
                         display_email: formData.display_email,
                         notes: formData.notes,
-                        reservation_label: formData.reservation_label || null
+                        reservation_label: formData.reservation_label || null,
+                        color: formData.color || null
                     })
                     .select()
                     .single();
@@ -308,17 +484,23 @@ export default function ConnectionsSettingsPage() {
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm('Are you sure you want to delete this connection?')) return;
+        if (!confirm('Archive this connection? Your synced emails and data will be preserved.')) return;
         try {
+            // Soft-delete: set archived_at, clear tokens, mark disconnected
             const { error } = await supabase
                 .from('connections')
-                .delete()
+                .update({
+                    archived_at: new Date().toISOString(),
+                    gmail_status: 'disconnected',
+                    gmail_access_token: null,
+                    gmail_refresh_token: null
+                })
                 .eq('id', id);
 
             if (error) throw error;
             fetchData();
         } catch (error: any) {
-            alert('Failed to delete: ' + error.message);
+            alert('Failed to archive: ' + error.message);
         }
     };
 
@@ -351,6 +533,51 @@ export default function ConnectionsSettingsPage() {
 
     return (
         <>
+            {/* Toast Notification */}
+            {toast && (
+                <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-top-2 max-w-md">
+                    <div className={`rounded-lg shadow-lg border px-4 py-3 flex items-start gap-3 ${toast.type === 'success' ? 'bg-green-50 border-green-200' :
+                            toast.type === 'error' ? 'bg-red-50 border-red-200' :
+                                toast.type === 'warning' ? 'bg-amber-50 border-amber-200' :
+                                    'bg-blue-50 border-blue-200'
+                        }`}>
+                        <div className={`flex-shrink-0 text-lg ${toast.type === 'success' ? 'text-green-600' :
+                                toast.type === 'error' ? 'text-red-600' :
+                                    toast.type === 'warning' ? 'text-amber-600' :
+                                        'text-blue-600'
+                            }`}>
+                            {toast.type === 'success' ? '✓' :
+                                toast.type === 'error' ? '✕' :
+                                    toast.type === 'warning' ? '⚠' : 'ℹ'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className={`font-medium text-sm ${toast.type === 'success' ? 'text-green-800' :
+                                    toast.type === 'error' ? 'text-red-800' :
+                                        toast.type === 'warning' ? 'text-amber-800' :
+                                            'text-blue-800'
+                                }`}>
+                                {toast.message}
+                            </p>
+                            {toast.details && (
+                                <p className={`mt-0.5 text-xs ${toast.type === 'success' ? 'text-green-600' :
+                                        toast.type === 'error' ? 'text-red-600' :
+                                            toast.type === 'warning' ? 'text-amber-600' :
+                                                'text-blue-600'
+                                    }`}>
+                                    {toast.details}
+                                </p>
+                            )}
+                        </div>
+                        <button
+                            onClick={() => setToast(null)}
+                            className="flex-shrink-0 text-gray-400 hover:text-gray-600"
+                        >
+                            ×
+                        </button>
+                    </div>
+                </div>
+            )}
+
             <div className="max-w-4xl mx-auto space-y-6">
                 <header className="flex items-center justify-between">
                     <div>
@@ -387,6 +614,12 @@ export default function ConnectionsSettingsPage() {
                         {connections.map(cx => (
                             <div key={cx.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-wrap items-center justify-between hover:border-blue-200 transition-colors">
                                 <div className="flex items-start gap-4 basis-full sm:basis-auto mb-4 sm:mb-0">
+                                    {/* Color swatch */}
+                                    <div
+                                        className="w-3 h-3 rounded-full border border-gray-300 flex-shrink-0 mt-3"
+                                        style={{ backgroundColor: cx.color || '#e5e7eb' }}
+                                        title={cx.color ? `Color: ${cx.color}` : 'No color set'}
+                                    />
                                     <div className={`p-3 rounded-lg ${getPlatformStyle(cx.platform)}`}>
                                         <span className="font-bold text-lg capitalize">{cx.platform === 'pms' ? 'PMS' : cx.platform[0]}</span>
                                     </div>
@@ -410,24 +643,51 @@ export default function ConnectionsSettingsPage() {
 
                                     <div className="flex flex-col items-end min-w-[100px]">
                                         {/* Status Chip */}
-                                        {cx.gmail_status === 'connected' ? (
+                                        {verifyingIds.has(cx.id) ? (
+                                            // Verifying connection health
+                                            <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 rounded-full border border-blue-100">
+                                                <svg className="w-3 h-3 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
+                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                </svg>
+                                                <span className="text-xs font-medium text-blue-700">Verifying...</span>
+                                            </div>
+                                        ) : cx.gmail_status === 'connected' && cx.reservation_label ? (
+                                            // Fully configured
                                             <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-green-50 rounded-full border border-green-100">
                                                 <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
                                                 <span className="text-xs font-medium text-green-700">Connected</span>
                                             </div>
-                                        ) : (
+                                        ) : cx.gmail_status === 'connected' ? (
+                                            // Connected but needs label
+                                            <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-50 rounded-full border border-amber-100">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                                <span className="text-xs font-medium text-amber-700">Needs Label</span>
+                                            </div>
+                                        ) : cx.gmail_status === 'needs_reconnect' ? (
+                                            // Needs reconnect - token expired
+                                            <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-orange-50 rounded-full border border-orange-200">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                                                <span className="text-xs font-medium text-orange-700">Needs Reconnect</span>
+                                            </div>
+                                        ) : cx.gmail_status === 'disconnected' || cx.gmail_status === 'error' ? (
+                                            // Disconnected or error
                                             <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-red-50 rounded-full border border-red-100">
                                                 <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                                                <span className="text-xs font-medium text-red-700">
-                                                    {cx.gmail_status === 'error' ? 'Disconnected' : 'Not Linked'}
-                                                </span>
+                                                <span className="text-xs font-medium text-red-700">Disconnected</span>
+                                            </div>
+                                        ) : (
+                                            // Not connected yet
+                                            <div className="flex items-center gap-1.5 px-2.5 py-0.5 bg-gray-50 rounded-full border border-gray-200">
+                                                <div className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                                                <span className="text-xs font-medium text-gray-600">Not Linked</span>
                                             </div>
                                         )}
 
                                         {/* Last Synced Text */}
                                         {cx.last_synced_at && cx.gmail_status === 'connected' && (
                                             <span className="text-[10px] text-gray-400 mt-1">
-                                                Synced {new Date(cx.last_synced_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                                                Synced {new Date(cx.last_synced_at).toLocaleDateString([], { month: 'short', day: 'numeric' })} {new Date(cx.last_synced_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
                                             </span>
                                         )}
                                     </div>
@@ -435,13 +695,26 @@ export default function ConnectionsSettingsPage() {
                                     {/* Action Buttons */}
                                     <div className="flex gap-2 items-center">
                                         {cx.gmail_status !== 'connected' ? (
+                                            // Not connected / needs reconnect - show Connect/Reconnect button
                                             <button
                                                 onClick={() => handleConnectGmail(cx.id)}
                                                 className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap"
                                             >
-                                                {cx.gmail_status === 'error' ? 'Reconnect' : 'Connect'}
+                                                {cx.gmail_status === 'error' || cx.gmail_status === 'needs_reconnect' || cx.gmail_status === 'disconnected' ? 'Reconnect' : 'Connect Gmail'}
+                                            </button>
+                                        ) : !cx.reservation_label ? (
+                                            // Connected but no label - show Configure Label button
+                                            <button
+                                                onClick={() => {
+                                                    handleOpenModal(cx);
+                                                    fetchGmailLabels(cx.id);
+                                                }}
+                                                className="px-3 py-1.5 bg-amber-500 text-white text-xs font-medium rounded hover:bg-amber-600 shadow-sm transition-colors whitespace-nowrap"
+                                            >
+                                                ⚙️ Configure Label
                                             </button>
                                         ) : (
+                                            // Fully configured - show Sync Now
                                             <button
                                                 onClick={() => handleSync(cx.id)}
                                                 disabled={syncingIds.has(cx.id)}
@@ -501,7 +774,7 @@ export default function ConnectionsSettingsPage() {
                         </div>
 
                         <div className="p-6 space-y-6 overflow-y-auto">
-                            {/* Connection Name Field (New) */}
+                            {/* Connection Name Field */}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Connection Name</label>
                                 <input
@@ -512,6 +785,36 @@ export default function ConnectionsSettingsPage() {
                                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                                 />
                                 <p className="text-xs text-gray-500 mt-1">A friendly nickname for this account (optional).</p>
+                            </div>
+
+                            {/* Connection Color */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                                <div className="flex items-center gap-3">
+                                    <input
+                                        type="color"
+                                        value={formData.color || '#e5e7eb'}
+                                        onChange={e => setFormData({ ...formData, color: e.target.value })}
+                                        className="w-10 h-10 rounded cursor-pointer border border-gray-300"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={formData.color}
+                                        onChange={e => setFormData({ ...formData, color: e.target.value })}
+                                        placeholder="#FF5733"
+                                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-sm"
+                                    />
+                                    {formData.color && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setFormData({ ...formData, color: '' })}
+                                            className="text-gray-400 hover:text-gray-600 text-xs"
+                                        >
+                                            Clear
+                                        </button>
+                                    )}
+                                </div>
+                                <p className="text-xs text-gray-500 mt-1">Visual color for this connection (shown on calendar).</p>
                             </div>
 
                             <div>
@@ -550,48 +853,142 @@ export default function ConnectionsSettingsPage() {
                                 />
                             </div>
 
-                            {/* Gmail Label Field */}
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 mb-1">
-                                    Gmail Label (Reservation Emails)
-                                </label>
-                                <div className="space-y-2">
-                                    {gmailLabels.length > 0 ? (
-                                        <select
-                                            value={formData.reservation_label}
-                                            onChange={e => setFormData({ ...formData, reservation_label: e.target.value })}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                                        >
-                                            <option value="">-- Select a label --</option>
-                                            {gmailLabels.map(label => (
-                                                <option key={label.id} value={label.name}>
-                                                    {label.name}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    ) : (
-                                        <input
-                                            type="text"
-                                            value={formData.reservation_label}
-                                            onChange={e => setFormData({ ...formData, reservation_label: e.target.value })}
-                                            placeholder="e.g. Airbnb Guests, Lodgify Guests"
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                                        />
+                            {/* Gmail Label Configuration - Only show for existing connections */}
+                            {editingId && (
+                                <div className={`p-4 rounded-lg border-2 ${editingConnection?.gmail_status !== 'connected'
+                                    ? 'bg-red-50 border-red-200'
+                                    : formData.reservation_label
+                                        ? 'bg-green-50 border-green-200'
+                                        : 'bg-amber-50 border-amber-200'
+                                    }`}>
+                                    <label className="block text-sm font-semibold text-gray-800 mb-2">
+                                        📧 Gmail Label Configuration
+                                        {editingConnection?.gmail_status === 'connected' && formData.reservation_label && (
+                                            <span className="ml-2 text-xs font-normal text-green-700">✓ Configured</span>
+                                        )}
+                                    </label>
+
+                                    {/* Disconnected / Needs Reconnect State */}
+                                    {editingConnection?.gmail_status && editingConnection.gmail_status !== 'connected' && (
+                                        <div className="mb-4 p-3 bg-red-100 rounded-lg border border-red-200">
+                                            <p className="text-sm text-red-800 font-medium mb-2">
+                                                ⚠️ Gmail {editingConnection.gmail_status === 'needs_reconnect' ? 'access expired' : 'is disconnected'}
+                                            </p>
+                                            <p className="text-xs text-red-600 mb-3">
+                                                {editingConnection.gmail_status === 'needs_reconnect'
+                                                    ? 'Your Gmail access token has expired. Please reconnect to continue syncing emails.'
+                                                    : 'Connect your Gmail account to sync reservation emails.'}
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleConnectGmail(editingId)}
+                                                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                                            >
+                                                {editingConnection.gmail_status === 'needs_reconnect' ? '🔄 Reconnect Gmail' : '🔗 Connect Gmail'}
+                                            </button>
+                                        </div>
                                     )}
-                                    {editingId && (
-                                        <button
-                                            type="button"
-                                            onClick={() => fetchGmailLabels(editingId)}
-                                            className="text-xs text-blue-600 hover:underline"
-                                        >
-                                            {gmailLabels.length > 0 ? 'Refresh labels' : 'Load labels from Gmail'}
-                                        </button>
+
+                                    {/* Not Connected Yet State */}
+                                    {!editingConnection?.gmail_status && (
+                                        <div className="mb-4 p-3 bg-gray-100 rounded-lg border border-gray-200">
+                                            <p className="text-sm text-gray-700 mb-3">
+                                                Connect your Gmail to automatically sync reservation emails.
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleConnectGmail(editingId)}
+                                                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                                            >
+                                                🔗 Connect Gmail
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {/* Loading state */}
+                                    {labelsLoading && (
+                                        <div className="text-sm text-gray-600 py-2 flex items-center gap-2">
+                                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                            </svg>
+                                            Loading Gmail labels...
+                                        </div>
+                                    )}
+
+                                    {/* Error state */}
+                                    {labelsError && !labelsLoading && (
+                                        <div className="text-sm text-red-600 py-2 px-3 bg-red-50 rounded-lg border border-red-200">
+                                            ⚠️ {labelsError}
+                                        </div>
+                                    )}
+
+                                    {/* Label dropdown when labels are loaded */}
+                                    {gmailLabels.length > 0 && !labelsLoading ? (
+                                        <div className="space-y-3">
+                                            <p className="text-sm text-gray-700">
+                                                Select the Gmail label where your reservation emails are stored:
+                                            </p>
+                                            <select
+                                                value={selectedLabel || formData.reservation_label}
+                                                onChange={e => setSelectedLabel(e.target.value)}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                                            >
+                                                <option value="">-- Select a label --</option>
+                                                {gmailLabels.map(label => (
+                                                    <option key={label.id} value={label.name}>
+                                                        {label.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleSaveLabel(editingId)}
+                                                    disabled={actionLoading || !selectedLabel}
+                                                    className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                >
+                                                    {actionLoading ? 'Saving...' : '✓ Save Label'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => fetchGmailLabels(editingId)}
+                                                    disabled={labelsLoading}
+                                                    className="px-4 py-2 text-gray-600 text-sm hover:text-blue-600 disabled:opacity-50"
+                                                >
+                                                    ↻ Refresh
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : !labelsLoading && !labelsError && (
+                                        <div className="space-y-2">
+                                            {formData.reservation_label ? (
+                                                <p className="text-sm text-green-700">
+                                                    Currently using: <strong>{formData.reservation_label}</strong>
+                                                </p>
+                                            ) : (
+                                                <p className="text-sm text-amber-700">
+                                                    ⚠️ No label configured. Select a label to start syncing reservation emails.
+                                                </p>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={() => fetchGmailLabels(editingId)}
+                                                disabled={labelsLoading}
+                                                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                                            >
+                                                {labelsLoading && (
+                                                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                    </svg>
+                                                )}
+                                                Load Labels from Gmail
+                                            </button>
+                                        </div>
                                     )}
                                 </div>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    The Gmail label where reservation emails are stored. Leave empty if not using Gmail sync.
-                                </p>
-                            </div>
+                            )}
 
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 mb-2">Map to Properties</label>

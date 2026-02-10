@@ -63,24 +63,31 @@ export class ICalProcessor {
         let events: any = {};
 
         try {
-            // 1. Load Reservation Facts for Enrichment (Scoped to this property's connections)
+            // 1. Load Reservation Facts for Enrichment (Workspace-scoped, including archived connections)
+            // Two-step query: get ALL connection IDs from workspace, then load facts
             let facts: ReservationFact[] = [];
             try {
-                const { data: connProps } = await supabase
-                    .from('connection_properties')
-                    .select('connection_id')
-                    .eq('property_id', feed.property_id);
+                const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-                if (connProps && connProps.length > 0) {
-                    const connectionIds = connProps.map(cp => cp.connection_id);
+                // Step 1: Get ALL connection IDs from this workspace (including archived ones)
+                const { data: workspaceConnections } = await supabase
+                    .from('connections')
+                    .select('id')
+                    .eq('workspace_id', workspaceId);
+
+                if (workspaceConnections && workspaceConnections.length > 0) {
+                    const connectionIds = workspaceConnections.map(c => c.id);
+
+                    // Step 2: Load facts from any of these connections
                     const { data: rawFacts } = await supabase
                         .from('reservation_facts')
                         .select('*')
                         .in('connection_id', connectionIds)
-                        .gt('check_out', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()); // Last 30 days + future
+                        .gt('check_out', windowStart);
 
                     if (rawFacts) facts = rawFacts as any[];
                 }
+                console.log(`[ICalProcessor] Loaded ${facts.length} reservation facts for workspace ${workspaceId}`);
             } catch (e) {
                 console.warn('[ICalProcessor] Failed to load reservation facts:', e);
             }
@@ -182,7 +189,36 @@ export class ICalProcessor {
                     }
                 }
 
-                // 6. Upsert Booking
+                // 6. Preserve existing real guest names (don't overwrite with masked names)
+                const isMaskedName = (n: string) =>
+                    ['Reserved', 'Blocked', 'Not available', 'Unknown', 'Private'].some(m =>
+                        n.toLowerCase() === m.toLowerCase() || n.toLowerCase().startsWith(m.toLowerCase())
+                    );
+
+                // Check if booking already exists with a real (non-masked) guest name
+                if (isMaskedName(guestName)) {
+                    try {
+                        const { data: existing } = await supabase
+                            .from('bookings')
+                            .select('guest_name, guest_first_name, guest_last_initial')
+                            .eq('property_id', feed.property_id)
+                            .eq('source_type', feed.source_type)
+                            .eq('external_uid', uid)
+                            .single();
+
+                        if (existing?.guest_name && !isMaskedName(existing.guest_name)) {
+                            // Preserve the existing real name
+                            guestName = existing.guest_name;
+                            guestFirst = existing.guest_first_name;
+                            guestLastInitial = existing.guest_last_initial;
+                            console.log(`[ICalProcessor] Preserved existing guest name "${guestName}" for ${uid}`);
+                        }
+                    } catch (e) {
+                        // No existing booking, that's fine
+                    }
+                }
+
+                // 7. Upsert Booking
                 const sanitizedRawData = sanitizeForJson(event);
                 const { error: bookingError } = await supabase
                     .from('bookings')

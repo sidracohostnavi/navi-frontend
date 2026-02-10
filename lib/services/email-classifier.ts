@@ -140,7 +140,6 @@ const CONFIRMATION_RULES: ConfirmationRule[] = [
             /booking is confirmed/i,
         ],
         requiredBodyPatterns: [
-            /Confirmation code/i,
             /(Check-in|Check in|Checkin)/i,
         ],
         description: 'Airbnb reservation confirmation'
@@ -180,6 +179,24 @@ const CONFIRMATION_RULES: ConfirmationRule[] = [
         ],
         description: 'VRBO reservation confirmation'
     },
+    // Generic / Other Platforms (Direct)
+    {
+        platform: 'Direct/Other',
+        subjectPatterns: [
+            /You have a new reservation/i,
+            /Reservation from/i,
+            /Booking confirmed/i,
+        ],
+        bodyPatterns: [
+            /Reservation Confirmation/i,
+            /Booking Confirmation/i,
+        ],
+        requiredBodyPatterns: [
+            /(Check-in|Arrival)/i,
+            /(Check-out|Departure)/i,
+        ],
+        description: 'Generic reservation confirmation'
+    }
 ];
 
 // =============================================================================

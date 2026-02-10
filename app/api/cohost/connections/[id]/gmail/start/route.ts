@@ -93,39 +93,16 @@ export async function GET(
             }, { status: 403 });
         }
 
-        // 3.1 Verify Eligibility (Simple Label Check)
-        // Rule: If you have a configured reservation_label, you are eligible for Gmail OAuth.
+        // 3.1 Label Check Removed
+        // Previously required reservation_label BEFORE OAuth, but that's backwards.
+        // Labels are Gmail-account-specific, so user must authenticate first, THEN select label.
+        // Label selection now happens in post-auth "Configure Gmail Label" step.
 
-        const hasLabel = !!connection.reservation_label;
-        const eligibilityReason = hasLabel ? 'has_reservation_label' : 'missing_reservation_label';
-
-        // NOTE: We used to check 'provider', but that column does not exist.
-        // We now allow ALL connections to attempt Gmail link if they have a label.
-
-        if (!hasLabel) {
-            console.error(JSON.stringify({
-                event: 'oauth_start_failed',
-                outcome: 'blocked',
-                user_id: user.id,
-                active_workspace_id: workspaceId,
-                connection_id: id,
-                error_code: 'CONNECTION_LABEL_MISSING',
-                expected: 'reservation_label_configured',
-                gmail_eligibility_reason: eligibilityReason
-            }));
-            return NextResponse.json({
-                error: 'Connection must have a configured Gmail label to start OAuth',
-                code: 'CONNECTION_LABEL_MISSING'
-            }, { status: 400 });
-        }
-
-        // Log Eligibility decision for debugging
         console.log(JSON.stringify({
             event: 'gmail_eligibility_check',
             connection_id: id,
             is_eligible: true,
-            gmail_eligibility_reason: eligibilityReason,
-            has_label: hasLabel
+            note: 'Label selection happens post-OAuth'
         }));
 
         // 4. Generate Auth URL

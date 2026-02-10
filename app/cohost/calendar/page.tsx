@@ -6,7 +6,8 @@ import Link from 'next/link';
 import {
   HomeIcon,
   UsersIcon,
-  ExclamationTriangleIcon
+  ExclamationTriangleIcon,
+  XMarkIcon
 } from '@heroicons/react/20/solid';
 import { createClient } from '@/lib/supabase/client';
 import { getPlatformColors, getPlatformBadgeLabel } from '@/lib/utils/platform-colors';
@@ -35,7 +36,27 @@ type Booking = {
   platform?: string; // Human Readable (e.g. "Spark & Stay")
   platformName: string;
   needsReview: boolean;
+  confirmationCode?: string;
   sourceFeedId?: string;
+  externalUid?: string;
+  createdAt?: string;
+  // Manual resolution fields (human-in-the-loop)
+  manualConnectionId?: string;
+  manualGuestName?: string;
+  manualGuestCount?: number;
+  manualNotes?: string;
+  manuallyResolvedAt?: string;
+};
+
+// Reservation facts from Gmail parsing - used for TRUE enrichment
+type ReservationFact = {
+  id: string;
+  connectionId: string;
+  checkIn: string;
+  checkOut: string;
+  guestName: string;
+  guestCount?: number;
+  confirmationCode?: string;
 };
 
 // --- Constants ---
@@ -55,12 +76,7 @@ const MAX_DATE = new Date(TODAY);
 MAX_DATE.setMonth(TODAY.getMonth() + 24);
 MAX_DATE.setDate(1); // Start of that month
 
-const CHANNEL_PRIORITY: Record<Channel, number> = {
-  'direct': 1,
-  'airbnb': 2,
-  'vrbo': 3,
-  'other': 4
-};
+
 
 // --- Helpers ---
 const toIso = (d: Date) => d.toISOString().split('T')[0];
@@ -68,6 +84,18 @@ const addDays = (d: Date, days: number) => {
   const newDate = new Date(d);
   newDate.setDate(newDate.getDate() + days);
   return newDate;
+};
+
+const normalizeToLocalMidnight = (d: Date) => {
+  const nd = new Date(d);
+  nd.setHours(0, 0, 0, 0);
+  return nd;
+};
+
+const parseDateOnly = (dateStr: string) => {
+  // Expect YYYY-MM-DD (handle legacy YYYY/MM/DD just in case)
+  const normalized = dateStr.includes('/') ? dateStr.replace(/\//g, '-') : dateStr;
+  return new Date(`${normalized}T00:00:00`);
 };
 
 const getDatesInWindow = (startDate: Date, days: number) => {
@@ -78,10 +106,11 @@ const getDatesInWindow = (startDate: Date, days: number) => {
   return dates;
 };
 
-const getGridPosition = (booking: Booking, windowStart: Date, windowDays: number) => {
-  const bStart = new Date(booking.startDate);
-  const bEnd = new Date(booking.endDate);
-  const wStart = new Date(windowStart);
+
+const getGridPosition = (item: { startDate: string; endDate: string }, windowStart: Date, windowDays: number) => {
+  const bStart = parseDateOnly(item.startDate);
+  const bEnd = parseDateOnly(item.endDate);
+  const wStart = normalizeToLocalMidnight(windowStart);
 
   bStart.setHours(0, 0, 0, 0);
   bEnd.setHours(0, 0, 0, 0);
@@ -110,50 +139,11 @@ const getGridPosition = (booking: Booking, windowStart: Date, windowDays: number
   return { start: visibleStart, span: visibleDuration, isVisible: visibleDuration > 0 };
 };
 
-// Deduplication Logic
-type BookingGroup = {
-  primary: Booking;
-  duplicates: Booking[];
-};
 
-const deduplicateBookings = (bookings: Booking[]): BookingGroup[] => {
-  const sorted = [...bookings].sort((a, b) =>
-    new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
-  );
 
-  const groups: BookingGroup[] = [];
 
-  for (const booking of sorted) {
-    let placed = false;
-    const bStart = new Date(booking.startDate).getTime();
-    const bEnd = new Date(booking.endDate).getTime();
-
-    for (const group of groups) {
-      const pStart = new Date(group.primary.startDate).getTime();
-      const pEnd = new Date(group.primary.endDate).getTime();
-
-      if (bStart < pEnd && bEnd > pStart) {
-        const currentPriority = CHANNEL_PRIORITY[group.primary.channel] || 99;
-        const newPriority = CHANNEL_PRIORITY[booking.channel] || 99;
-
-        if (newPriority < currentPriority) {
-          group.duplicates.push(group.primary);
-          group.primary = booking;
-        } else {
-          group.duplicates.push(booking);
-        }
-        placed = true;
-        break;
-      }
-    }
-
-    if (!placed) {
-      groups.push({ primary: booking, duplicates: [] });
-    }
-  }
-
-  return groups;
-};
+// Default color for unenriched bookings
+const DEFAULT_BOOKING_COLOR = '#e5e7eb'; // gray-200
 
 export default function CalendarPage() {
   const supabase = createClient();
@@ -164,26 +154,74 @@ export default function CalendarPage() {
   const [isResizing, setIsResizing] = useState(false);
 
   // Infinite Scroll & Navigation State
-  const [rangeStart, setRangeStart] = useState(TODAY);
+  const [rangeStart, setRangeStart] = useState<Date | null>(null);
   const [loadedDays, setLoadedDays] = useState(45); // Initial load window
   const [loadingMore, setLoadingMore] = useState(false);
+  const [minDate, setMinDate] = useState<Date | null>(null); // Earliest allowed scroll
+  const [visibleMonthDate, setVisibleMonthDate] = useState<Date | null>(null);
+
+  // Hydrate dates on client-side only to prevent mismatch
+  useEffect(() => {
+    const now = normalizeToLocalMidnight(new Date());
+    setRangeStart(now);
+    setVisibleMonthDate(now);
+
+    // Set Min Date relative to client-side "now"
+    const min = new Date(now);
+    min.setMonth(now.getMonth() - 12);
+    min.setDate(1);
+    setMinDate(min);
+  }, []);
 
   // Data State
   const [properties, setProperties] = useState<Property[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [feedMap, setFeedMap] = useState<Record<string, string>>({}); // feed_id -> name
+  const [feedMap, setFeedMap] = useState<Record<string, string>>({});
+  const [connectionIdMap, setConnectionIdMap] = useState<Record<string, string>>({}); // NormalizedName -> UUID
+  const [reservationFacts, setReservationFacts] = useState<ReservationFact[]>([]); // Gmail-sourced enrichment
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [showDuplicates, setShowDuplicates] = useState(false);
 
-  const dates = useMemo(() => getDatesInWindow(rangeStart, loadedDays), [rangeStart, loadedDays]);
+
+  // Resolution modal state
+  const [resolveBooking, setResolveBooking] = useState<Booking | null>(null);
+  const [connections, setConnections] = useState<Array<{ id: string; name: string; color?: string }>>([]);
+  const [resolutionForm, setResolutionForm] = useState({
+    connectionId: '',
+    guestName: '',
+    notes: '',
+    guestCount: '1'
+  });
+  const [savingResolution, setSavingResolution] = useState(false);
+
+  // --- Connection Color Map (from DB color_hex) ---
+  const connectionColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    connections.forEach(c => {
+      if (c.color) map.set(c.id, c.color);
+    });
+    return map;
+  }, [connections]);
+
+  const getConnectionColor = useCallback((connectionId: string): string | null => {
+    return connectionColorMap.get(connectionId) || null;
+  }, [connectionColorMap]);
+
+  // Map connectionId → name (for showing enrichment source label)
+  const connectionIdNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    connections.forEach(c => {
+      if (c.name) map.set(c.id, c.name.trim());
+    });
+    return map;
+  }, [connections]);
 
   // Fetch Feeds Helper
   const fetchFeeds = useCallback(async () => {
     try {
       const { data: feedsData } = await supabase
         .from('ical_feeds')
-        .select('id, source_name, last_synced_at'); // Added last_synced_at per requirement
+        .select('id, source_name'); // Added last_synced_at per requirement
 
       if (feedsData) {
         const map: Record<string, string> = {};
@@ -198,7 +236,7 @@ export default function CalendarPage() {
   }, [supabase]);
 
   // Initial Fetch (Properties + Feeds + First 45 Days)
-  const fetchInitialData = useCallback(async (startPoint: Date = TODAY) => {
+  const fetchInitialData = useCallback(async (startPoint: Date) => {
     try {
       setLoading(true);
 
@@ -219,9 +257,63 @@ export default function CalendarPage() {
           name: p.name,
           image: p.image_url
         }));
+        console.log(`[Calendar DEBUG] Loaded ${mappedProps.length} properties:`, mappedProps.map(p => ({ id: p.id, name: p.name })));
         setProperties(mappedProps);
 
-        // 3. Fetch Initial Bookings
+        // 3. Fetch Earliest Date for Bound
+        if (mappedProps.length > 0) {
+          const propIds = mappedProps.map(p => p.id);
+          const { data: minData, error: minError } = await supabase
+            .from('bookings')
+            .select('check_in')
+            .in('property_id', propIds)
+            .order('check_in', { ascending: true })
+            .limit(1)
+            .single();
+
+          if (!minError && minData) {
+            const earliest = new Date(minData.check_in);
+            setMinDate(earliest);
+          }
+
+          // 4. Fetch Connections & Build Name -> ID Map (Universal)
+          const { data: cxData } = await supabase.from('connections').select('id, name, platform, color');
+
+          const idMap: Record<string, string> = {};
+          if (cxData) {
+            cxData.forEach(c => {
+              if (c.name) {
+                // Normalize name for matching (trim, lower)
+                const key = c.name.trim().toLowerCase();
+                idMap[key] = c.id;
+              }
+            });
+            // Store connections for resolution modal dropdown
+            setConnections(cxData.map(c => ({ id: c.id, name: c.name || '', color: c.color })));
+          }
+          setConnectionIdMap(idMap);
+
+          // 5. Fetch Reservation Facts (Gmail enrichment data)
+          const { data: factsData } = await supabase
+            .from('reservation_facts')
+            .select('id, connection_id, check_in, check_out, guest_name, guest_count, confirmation_code');
+
+          if (factsData) {
+            const mappedFacts: ReservationFact[] = factsData.map(f => ({
+              id: f.id,
+              connectionId: f.connection_id,
+              checkIn: f.check_in,
+              checkOut: f.check_out,
+              guestName: f.guest_name || '',
+              guestCount: f.guest_count,
+              confirmationCode: f.confirmation_code
+            }));
+            setReservationFacts(mappedFacts);
+            console.log(`[Calendar] Loaded ${mappedFacts.length} reservation facts for enrichment`);
+          }
+        }
+
+        // 6. Fetch Initial Bookings
         if (mappedProps.length === 0) {
           setBookings([]);
           setLoading(false);
@@ -236,12 +328,14 @@ export default function CalendarPage() {
     } finally {
       setLoading(false);
     }
-  }, [supabase, properties.length, fetchFeeds]); // properties.length dependency to avoid re-fetching props
+  }, [supabase, fetchFeeds, properties.length, setMinDate]); // properties.length dependency to avoid re-fetching props
 
   // Fetch Bookings for a specific range and MERGE into state
   const fetchBookingsRange = async (start: Date, end: Date) => {
     const startStr = start.toISOString();
     const endStr = end.toISOString();
+
+    console.log(`[Calendar DEBUG] Fetching bookings from ${startStr} to ${endStr}`);
 
     const { data: bookingsData, error } = await supabase
       .from('bookings')
@@ -255,23 +349,64 @@ export default function CalendarPage() {
       return;
     }
 
+    console.log(`[Calendar DEBUG] Fetched ${bookingsData?.length || 0} bookings`);
+
+    // Log unique property IDs and platforms for debugging
+    const propertyIdSet = new Set((bookingsData || []).map(b => b.property_id));
+    const platformSet = new Set((bookingsData || []).map(b => b.platform || 'null'));
+    console.log(`[Calendar DEBUG] Unique property_ids:`, Array.from(propertyIdSet));
+    console.log(`[Calendar DEBUG] Unique platforms:`, Array.from(platformSet));
+
     const mappedBookings: Booking[] = (bookingsData || []).map(b => ({
       id: b.id,
       propertyId: b.property_id,
-      startDate: b.check_in.split('T')[0].replace(/-/g, '/'),
-      endDate: b.check_out.split('T')[0].replace(/-/g, '/'),
+      startDate: b.check_in.split('T')[0],
+      endDate: b.check_out.split('T')[0],
       status: (b.status === 'confirmed' || b.status === 'pending') ? b.status : 'confirmed',
       totalPrice: b.total_amount || 0,
       channel: (['direct', 'airbnb', 'vrbo'].includes(b.source_type) ? b.source_type : 'other') as Channel,
-      platform: b.platform || b.source_type, // "Spark & Stay" etc.
+      platform: b.platform || b.source_type,
       platformName: b.platform || b.source_type,
       guestName: b.guest_name || 'Guest',
       guestFirstName: b.guest_first_name,
       guestLastInitial: b.guest_last_initial,
       needsReview: b.needs_review || false,
       guestCount: b.guest_count || 0,
-      sourceFeedId: b.source_feed_id
+      sourceFeedId: b.source_feed_id,
+      confirmationCode: b.confirmation_code,
+      externalUid: b.external_uid,
+      createdAt: b.created_at,
+      // Manual resolution fields
+      manualConnectionId: b.manual_connection_id,
+      manualGuestName: b.manual_guest_name,
+      manualGuestCount: b.manual_guest_count,
+      manualNotes: b.manual_notes,
+      manuallyResolvedAt: b.manually_resolved_at
     }));
+
+    // Discover orphaned properties (bookings with property_id not in current properties list)
+    setProperties(prevProperties => {
+      const existingPropertyIds = new Set(prevProperties.map(p => p.id));
+      const orphanedPropertyIds = new Set<string>();
+
+      for (const booking of mappedBookings) {
+        if (booking.propertyId && !existingPropertyIds.has(booking.propertyId)) {
+          orphanedPropertyIds.add(booking.propertyId);
+        }
+      }
+
+      if (orphanedPropertyIds.size === 0) return prevProperties;
+
+      // Create placeholder properties for orphaned bookings
+      const placeholderProperties: Property[] = Array.from(orphanedPropertyIds).map(id => ({
+        id,
+        name: `Unknown Property`, // Will be updated with real name if available
+        image: undefined
+      }));
+
+      console.log(`[Calendar] Added ${placeholderProperties.length} placeholder properties for orphaned bookings`);
+      return [...prevProperties, ...placeholderProperties];
+    });
 
     setBookings(prev => {
       // Merge and Deduplicate by ID
@@ -281,8 +416,8 @@ export default function CalendarPage() {
     });
   };
 
-  const loadMoreDays = async () => {
-    if (loadingMore) return;
+  const loadMoreDays = useCallback(async () => {
+    if (loadingMore || !rangeStart) return;
 
     const currentEnd = addDays(rangeStart, loadedDays);
 
@@ -295,20 +430,71 @@ export default function CalendarPage() {
     await fetchBookingsRange(currentEnd, nextEnd);
     setLoadedDays(prev => prev + 30);
     setLoadingMore(false);
-  };
+  }, [loadingMore, rangeStart, loadedDays, fetchBookingsRange]);
 
-  // Scroll Handler for Lazy Loading
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+  const prependDays = useCallback(async () => {
+    // Bounded past scroll
+    if (loadingMore || !rangeStart || !minDate || rangeStart <= minDate) return;
+
+    setLoadingMore(true);
+    const daysToAdd = 30;
+    const newStart = addDays(rangeStart, -daysToAdd);
+
+    // Ensure we don't go way past minDate unnecessarily (optional clamp could go here, but strict check is fine)
+
+    // 1. Fetch new data
+    await fetchBookingsRange(newStart, rangeStart);
+
+    // 2. Adjust State
+    setRangeStart(newStart);
+    setLoadedDays(prev => prev + daysToAdd);
+
+    // 3. Adjust Scroll Position to maintain visual stability
+    if (scrollContainerRef.current) {
+      const addedPixels = daysToAdd * CELL_WIDTH;
+      scrollContainerRef.current.scrollLeft += addedPixels;
+    }
+
+    setLoadingMore(false);
+  }, [loadingMore, rangeStart, minDate, fetchBookingsRange]);
+
+  // Scroll Handler for Lazy Loading & Dynamic Label
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const { scrollLeft, scrollWidth, clientWidth } = e.currentTarget;
-    // Trigger when within 600px of end
+
+    // 1. Infinite Scroll Right (Append)
     if (scrollLeft + clientWidth > scrollWidth - 600) {
       loadMoreDays();
     }
-  };
 
+    // 2. Infinite Scroll Left (Prepend)
+    if (scrollLeft < 500 && rangeStart && minDate && rangeStart > minDate) {
+      prependDays();
+    }
+
+    // 3. Dynamic Month Label (Throttled/Debounced roughly by render freq)
+    if (rangeStart) {
+      const visibleIndex = Math.floor(scrollLeft / CELL_WIDTH);
+      // Add ~1-2 days buffer for center-ish alignment
+      const visibleDate = addDays(rangeStart, visibleIndex + 1);
+
+      // Only update if month changes to avoid thrashing
+      setVisibleMonthDate(prev => {
+        if (prev && (prev.getMonth() !== visibleDate.getMonth() || prev.getFullYear() !== visibleDate.getFullYear())) {
+          return visibleDate;
+        }
+        return prev;
+      });
+    }
+
+  }, [rangeStart, minDate, loadMoreDays, prependDays]); // Dependencies for scroll handler
+
+  // Trigger initial fetch when rangeStart is ready
   useEffect(() => {
-    fetchInitialData(TODAY);
-  }, [fetchInitialData]);
+    if (rangeStart) {
+      fetchInitialData(rangeStart);
+    }
+  }, [rangeStart, fetchInitialData]);
 
   const handleRefresh = async () => {
     if (properties.length === 0) return;
@@ -333,60 +519,70 @@ export default function CalendarPage() {
     setBookings([]);
     setLoadedDays(45);
     // Force re-fetch of feeds and bookings (properties check handled inside)
-    await fetchInitialData(rangeStart);
+    if (rangeStart) {
+      await fetchInitialData(rangeStart);
+    }
     setSyncing(false);
   };
 
   // Jump / Navigation Handler
-  const jumpToDate = async (targetDate: Date) => {
+  const jumpToDate = (targetDate: Date) => {
     // Clamp date
-    let d = new Date(targetDate);
-    if (d < MIN_DATE) d = new Date(MIN_DATE);
+    let d = normalizeToLocalMidnight(new Date(targetDate));
+    if (minDate && d < minDate) d = new Date(minDate);
     // Don't strictly clamp MAX for jump start, but ensure we don't render forever
 
     // Reset state for new jump
     setRangeStart(d);
+    setVisibleMonthDate(d);
     setLoadedDays(45);
     setBookings([]); // Clear old bookings to avoid memory bloat if jumping far
-    setLoading(true);
 
     // Reset Scroll
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTo({ left: 0, behavior: 'auto' });
     }
 
-    // Fetch new range
-    await fetchBookingsRange(d, addDays(d, 45));
-    setLoading(false);
+    // Fetching happens via the useEffect that watches rangeStart
   };
 
   const handleMonthChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const monthsToAdd = parseInt(e.target.value);
-    const newDate = new Date(TODAY);
+    if (!rangeStart) return;
+
+    const newDate = new Date(); // Relative to 'now'
     newDate.setDate(1); // Normalize to 1st
-    newDate.setMonth(TODAY.getMonth() + monthsToAdd);
+    newDate.setMonth(new Date().getMonth() + monthsToAdd);
     jumpToDate(newDate);
   };
 
+  // Calculate current month offset based on visibleMonthDate
+  const currentMonthOffset = useMemo(() => {
+    if (!visibleMonthDate) return 0;
+    const now = new Date();
+    const diffMonth = (visibleMonthDate.getFullYear() - now.getFullYear()) * 12 + (visibleMonthDate.getMonth() - now.getMonth());
+    return diffMonth;
+  }, [visibleMonthDate]);
+
+  // Computed Dates for Window
+  const dates = useMemo(() => {
+    return rangeStart ? getDatesInWindow(rangeStart, loadedDays) : [];
+  }, [rangeStart, loadedDays]);
+
   // Generate Month Options (-12 to +24)
-  const monthOptions = useMemo(() => {
-    const options = [];
-    for (let i = -12; i <= 24; i++) {
-      const d = new Date(TODAY);
-      d.setDate(1);
-      d.setMonth(TODAY.getMonth() + i);
-      const label = d.toLocaleString('default', { month: 'long', year: 'numeric' });
-      const value = i;
-      options.push({ label, value });
-    }
-    return options;
-  }, []);
+  const monthOptions = Array.from({ length: 37 }, (_, i) => {
+    const offset = i - 12; // -12 to +24
+    const d = new Date();
+    d.setMonth(d.getMonth() + offset);
+    return {
+      value: offset,
+      label: d.toLocaleString('default', { month: 'long', year: 'numeric' })
+    };
+  });
 
   // Calculate current selected month offset for dropdown
-  // Heuristic: compare rangeStart month/year to today
-  const currentMonthOffset = useMemo(() => {
-    return (rangeStart.getFullYear() - TODAY.getFullYear()) * 12 + (rangeStart.getMonth() - TODAY.getMonth());
-  }, [rangeStart]);
+  // Heuristic: compare visibleMonthDate month/year to today
+
 
   // Local Storage for Sidebar
   useEffect(() => {
@@ -447,15 +643,7 @@ export default function CalendarPage() {
             </button>
           </div>
 
-          <label className="flex items-center gap-2 text-xs font-medium text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-100">
-            <input
-              type="checkbox"
-              checked={showDuplicates}
-              onChange={e => setShowDuplicates(e.target.checked)}
-              className="rounded text-blue-600 focus:ring-blue-500"
-            />
-            Show duplicates
-          </label>
+
 
           <div className="flex items-center gap-3">
             <div className="relative">
@@ -524,8 +712,11 @@ export default function CalendarPage() {
           {/* Property Rows */}
           {!loading && properties.map((property, rowIdx) => {
             const gridRow = rowIdx + 2;
-            const propertyBookings = bookings.filter(b => b.propertyId === property.id);
-            const bookingGroups = deduplicateBookings(propertyBookings);
+            const allPropertyBookings = bookings.filter(b => b.propertyId === property.id);
+
+            // Direct render: one block per booking row, no grouping
+            const propertyBookings = allPropertyBookings;
+
             const isLast = rowIdx === properties.length - 1;
             const rowClass = isLast ? '' : 'border-b border-gray-100';
 
@@ -565,58 +756,231 @@ export default function CalendarPage() {
                   );
                 })}
 
-                {/* Bookings */}
-                {bookingGroups.flatMap((group) => {
-                  const itemsToRender = [group.primary];
-                  if (showDuplicates) itemsToRender.push(...group.duplicates);
+                {/* Dedup: same property + same dates → keep one, prefer enriched */}
+                {(() => {
+                  const dedupMap = new Map<string, Booking>();
+                  for (const b of propertyBookings) {
+                    const key = `${b.propertyId}|${b.startDate}|${b.endDate}`;
+                    const existing = dedupMap.get(key);
+                    if (!existing) {
+                      dedupMap.set(key, b);
+                    } else {
+                      // Prefer the one with a real guest name (not generic)
+                      const isGeneric = (name: string) => !name || ['guest', 'reserved', 'not available', 'blocked', 'unavailable'].includes(name.toLowerCase());
+                      if (isGeneric(existing.guestName) && !isGeneric(b.guestName)) {
+                        dedupMap.set(key, b);
+                      }
+                    }
+                  }
+                  return Array.from(dedupMap.values());
+                })().map((booking, _idx, dedupedBookings) => {
+                  let { start, span, isVisible } = getGridPosition(booking, rangeStart, loadedDays);
+                  if (!isVisible) return null;
 
-                  return itemsToRender.map((booking) => {
-                    const isDuplicate = booking.id !== group.primary.id;
-                    const { start, span, isVisible } = getGridPosition(booking, rangeStart, loadedDays);
-                    if (!isVisible) return null;
+                  // === DISPLAY LOGIC (Human-in-the-Loop) ===
+                  // Priority: Manual Override > Reservation Facts Match > Needs Attention (Gray)
 
-                    const colors = getPlatformColors(booking.platform || booking.channel);
-                    const badgeLabel = getPlatformBadgeLabel(booking.platform);
+                  const isManuallyResolved = !!booking.manuallyResolvedAt;
 
-                    // Identity Display Logic
-                    // 1. Try to get Feed Name from map ("Spark & Stay")
-                    // 2. Fallback to Booking's stored Platform Name ("Airbnb")
-                    // 3. Fallback to Channel ("airbnb")
-                    const accountName = booking.sourceFeedId ? feedMap[booking.sourceFeedId] : null;
-                    const displayLabel = accountName || badgeLabel;
+                  // TRUE ENRICHMENT: Match booking to reservation_facts
+                  // Priority: confirmation_code match (strongest) > date overlap match
+                  let matchedFact: ReservationFact | null = null;
 
-                    const getBookingState = (b: Booking) => {
-                      const todayStr = toIso(TODAY);
-                      if (b.endDate < todayStr) return 'past';
-                      if (b.startDate <= todayStr && b.endDate >= todayStr) return 'active';
-                      return 'future';
+                  if (!isManuallyResolved) {
+                    // Try confirmation code match first (strongest)
+                    if (booking.confirmationCode) {
+                      matchedFact = reservationFacts.find(f =>
+                        f.confirmationCode === booking.confirmationCode
+                      ) || null;
+                    }
+
+                    // Fallback: date overlap match (within 1 day tolerance)
+                    if (!matchedFact) {
+                      const bookingStart = new Date(booking.startDate);
+                      const bookingEnd = new Date(booking.endDate);
+
+                      // Find ALL date-matching facts
+                      const dateMatches = reservationFacts.filter(f => {
+                        const factStart = new Date(f.checkIn);
+                        const factEnd = new Date(f.checkOut);
+                        const startDiff = Math.abs(bookingStart.getTime() - factStart.getTime()) / (1000 * 60 * 60 * 24);
+                        const endDiff = Math.abs(bookingEnd.getTime() - factEnd.getTime()) / (1000 * 60 * 60 * 24);
+                        return startDiff <= 1 && endDiff <= 1;
+                      });
+
+                      // Prefer fact whose connection has a color set
+                      matchedFact = dateMatches.find(f => connectionColorMap.has(f.connectionId))
+                        || dateMatches[0]
+                        || null;
+                    }
+                  }
+
+                  const hasEnrichment = !!matchedFact;
+
+                  // GRACE WINDOW: New bookings (< 5 hours old) do NOT show warning
+                  // This allows time for async email ingestion to catch up
+                  const GRACE_WINDOW_MS = 5 * 60 * 60 * 1000; // 5 hours
+                  const bookingAgeFn = (b: Booking) => {
+                    if (!b.createdAt) return 9999999999; // Assume old if missing
+                    return new Date().getTime() - new Date(b.createdAt).getTime();
+                  };
+
+                  const isWithinGraceWindow = bookingAgeFn(booking) < GRACE_WINDOW_MS;
+
+                  // needsAttention badge disabled for now
+                  const needsAttention = false;
+
+                  let finalStyle: React.CSSProperties = {};
+                  let finalClasses = '';
+                  let resolvedConnectionColor: string | null = null;
+                  let labelText = ''; // Only set when enriched
+                  const isEnriched = isManuallyResolved || !!matchedFact;
+
+                  // Clip unenriched blocks: end before the next booking on this property
+                  if (!isEnriched && rangeStart) {
+                    const bookingEnd = new Date(booking.endDate);
+                    for (const other of dedupedBookings) {
+                      if (other.id === booking.id) continue;
+                      const otherStart = new Date(other.startDate);
+                      if (otherStart > new Date(booking.startDate) && otherStart < bookingEnd) {
+                        // Clip span to end before the other booking's check-in cell
+                        const otherPos = getGridPosition(other, rangeStart, loadedDays);
+                        if (otherPos.isVisible) {
+                          const clippedSpan = otherPos.start - start;
+                          if (clippedSpan > 0 && clippedSpan < span) {
+                            span = clippedSpan;
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  // === DISPLAY RULES ===
+                  // Unenriched: "Reservation", iCal guest count, grey, no label
+                  // Enriched:   fact guest name, fact guest count, connection color+name
+                  let displayGuestName = 'Reservation';
+                  let displayGuestCount = booking.guestCount; // iCal fallback
+
+                  if (isManuallyResolved) {
+                    displayGuestName = booking.manualGuestName || booking.guestName || 'Reservation';
+                    displayGuestCount = booking.manualGuestCount ?? displayGuestCount;
+                    if (booking.manualConnectionId) {
+                      resolvedConnectionColor = getConnectionColor(booking.manualConnectionId);
+                      labelText = connectionIdNameMap.get(booking.manualConnectionId) || '';
+                    }
+                  } else if (matchedFact) {
+                    displayGuestName = matchedFact.guestName || booking.guestName || 'Reservation';
+                    displayGuestCount = matchedFact.guestCount ?? displayGuestCount;
+                    resolvedConnectionColor = getConnectionColor(matchedFact.connectionId);
+                    labelText = connectionIdNameMap.get(matchedFact.connectionId) || '';
+                  }
+
+                  if (isEnriched && resolvedConnectionColor) {
+                    // Enriched: translucent connection color fill, slightly darker solid border
+                    finalStyle = {
+                      backgroundColor: `${resolvedConnectionColor}cc`,
+                      borderColor: resolvedConnectionColor,
+                      borderWidth: '2px',
                     };
+                    finalClasses = 'text-xs font-medium border text-gray-900 shadow-sm';
+                  } else {
+                    // Unenriched → neutral light grey, thin border
+                    finalStyle = {
+                      backgroundColor: '#f3f4f6',
+                      borderColor: '#d1d5db',
+                      borderWidth: '1px',
+                    };
+                    finalClasses = 'text-xs font-medium border text-gray-500';
+                  }
 
-                    const bookingState = getBookingState(booking);
-                    const isPast = bookingState === 'past';
-                    const isActive = bookingState === 'active';
+                  const accountName = booking.sourceFeedId ? feedMap[booking.sourceFeedId] : null;
+                  const badgeLabel = getPlatformBadgeLabel(booking.platform);
 
-                    return (
+                  const getBookingState = (b: Booking) => {
+                    const todayStr = toIso(TODAY);
+                    if (b.endDate < todayStr) return 'past';
+                    if (b.startDate <= todayStr && b.endDate >= todayStr) return 'active';
+                    return 'future';
+                  };
+
+                  const bookingState = getBookingState(booking);
+                  const isPast = bookingState === 'past';
+                  const isActive = bookingState === 'active';
+
+                  return (
+                    <div
+                      key={booking.id}
+                      className={`relative group ${isPast ? 'z-0' : 'z-10'} ${isActive ? 'z-30' : ''}`}
+                      style={{
+                        gridRow: gridRow,
+                        gridColumn: `${start + 2} / span ${span + 1}`,
+                        height: ROW_HEIGHT,
+                      }}
+                    >
+                      {/* Cleaning icon: only after a real guest checkout */}
+                      {(() => {
+                        const thisStart = new Date(booking.startDate);
+                        const genericNames = ['guest', 'reserved', 'not available', 'blocked', 'unavailable', 'airbnb (not available)'];
+                        const hasPriorCheckout = dedupedBookings.some(other => {
+                          if (other.id === booking.id) return false;
+                          // Prior booking must have a real guest name
+                          const otherName = (other.guestName || '').trim().toLowerCase();
+                          if (!otherName || genericNames.some(g => otherName.includes(g))) return false;
+                          const otherEnd = new Date(other.endDate);
+                          const gap = (thisStart.getTime() - otherEnd.getTime()) / (1000 * 60 * 60 * 24);
+                          return gap >= 0 && gap <= 1;
+                        });
+                        return hasPriorCheckout;
+                      })() && (
+                          <div
+                            className="absolute flex items-center justify-center"
+                            style={{
+                              left: CELL_WIDTH * 0.1,
+                              width: CELL_WIDTH * 0.4,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                            }}
+                            title="Cleaning / Turnover"
+                          >
+                            <span style={{ fontSize: '44px', lineHeight: 1 }}>🧹</span>
+                          </div>
+                        )}
+
+                      {/* Booking bar: starts halfway into check-in cell, extends ~10% into checkout cell */}
                       <div
-                        key={booking.id}
-                        className={`relative mx-1 group ${isDuplicate ? 'mt-8 h-8' : ''} ${isPast ? 'z-0' : 'z-10'} ${isActive ? 'z-30' : ''}`}
+                        className="absolute"
                         style={{
-                          gridRow: gridRow,
-                          gridColumn: `${start + 2} / span ${span}`,
-                          alignSelf: isDuplicate ? 'start' : 'center',
-                          marginTop: isDuplicate ? '32px' : '0',
+                          left: CELL_WIDTH / 2,
+                          right: CELL_WIDTH * 0.9,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
                         }}
                       >
                         <div
                           className={`
-                            rounded-lg border flex items-center px-1.5 overflow-hidden cursor-pointer transition-all
-                            ${isDuplicate ? 'h-full text-[10px] opacity-60' : 'h-12'}
-                            ${colors.bg} ${colors.border} ${colors.text}
-                            ${isPast ? 'opacity-60 grayscale filter brightness-95 border-opacity-20' : 'shadow-sm border-opacity-40'}
-                            ${isActive ? 'ring-2 ring-blue-500 ring-offset-1 shadow-lg scale-[1.02]' : 'hover:scale-[1.02] active:scale-[0.98]'}
-                          `}
+                          rounded-lg flex items-center px-1.5 overflow-hidden cursor-pointer transition-all h-12
+                          ${finalClasses}
+                          ${isPast ? 'opacity-60 grayscale filter brightness-95 border-opacity-20' : 'shadow-sm'}
+                          ${isActive ? 'ring-2 ring-blue-500 ring-offset-1 shadow-lg scale-[1.02]' : 'hover:scale-[1.02] active:scale-[0.98]'}
+                        `}
+                          style={finalStyle}
                         >
-                          {booking.needsReview && (
+                          {/* Needs Attention Indicator (Unenriched + Not Resolved) */}
+                          {needsAttention && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setResolveBooking(booking);
+                              }}
+                              className="absolute top-0 left-0 p-0.5 bg-orange-500 text-white rounded-br shadow-sm z-20 hover:bg-orange-600"
+                              title="Click to resolve - assign label & guest info"
+                            >
+                              <ExclamationTriangleIcon className="w-3 h-3" />
+                            </button>
+                          )}
+
+                          {/* Review Flag (separate from resolution) */}
+                          {booking.needsReview && !needsAttention && (
                             <div className="absolute top-0 right-0 p-0.5 bg-yellow-400 text-yellow-900 rounded-bl shadow-sm z-20" title="Needs Review">
                               <ExclamationTriangleIcon className="w-3 h-3" />
                             </div>
@@ -631,60 +995,47 @@ export default function CalendarPage() {
                                       <HomeIcon className="w-3 h-3" />}
                                 </div>
                                 <span className="font-bold truncate text-xs">
-                                  {booking.guestFirstName && booking.guestLastInitial
-                                    ? `${booking.guestFirstName} ${booking.guestLastInitial}.`
-                                    : booking.guestName}
+                                  {displayGuestName}
                                 </span>
                               </div>
-                              {booking.guestCount && booking.guestCount > 0 && (
+                              {displayGuestCount && displayGuestCount > 0 && (
                                 <div className="flex items-center gap-0.5 bg-white/60 px-1 rounded-full shrink-0">
                                   <UsersIcon className="w-2.5 h-2.5 opacity-70" />
-                                  <span className="text-[9px] font-bold">{booking.guestCount}</span>
+                                  <span className="text-[9px] font-bold">{displayGuestCount}</span>
                                 </div>
                               )}
-                            </div>
-                            {!isDuplicate && (
-                              <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
-                                {/* Platform Tag (Always Visible) */}
-                                <span className={`text-[9px] px-1 py-0 rounded ${colors.badge} shrink-0`}>
-                                  {badgeLabel}
-                                </span>
 
-                                {/* Account Name (Optional, distinct from platform) */}
-                                {accountName && (
-                                  <span className="text-[9px] text-gray-500 truncate font-medium max-w-[80px]" title={accountName}>
-                                    {accountName}
-                                  </span>
-                                )}
+                            </div>
+                            {labelText && (
+                              <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                                <span className="text-[10px] font-medium bg-white/60 text-gray-800 px-1.5 py-0.5 rounded-full truncate shrink-0 max-w-full" title={labelText}>
+                                  {labelText}
+                                </span>
                               </div>
                             )}
                           </div>
                         </div>
 
-                        {/* Tooltip */}
-                        <div className={`absolute left-1/2 -translate-x-1/2 hidden group-hover:block z-50 min-w-[200px] ${rowIdx === 0 ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
-                          <div className="bg-gray-900 text-white text-xs rounded-lg py-3 px-3 shadow-xl text-center ring-1 ring-white/10">
-                            <div className="flex items-center justify-center gap-2 mb-2 border-b border-white/20 pb-2">
-                              <span className="font-bold text-sm block">{booking.guestName}</span>
-                              {booking.needsReview && <span className="text-[10px] bg-yellow-500 text-black px-1.5 py-0.5 rounded font-bold">REVIEW</span>}
-                            </div>
-                            <div className="space-y-1 text-left px-1">
-                              <p className="opacity-80 flex justify-between"><span>Check-in:</span> <span className="font-mono">{booking.startDate}</span></p>
-                              <p className="opacity-80 flex justify-between"><span>Check-out:</span> <span className="font-mono">{booking.endDate}</span></p>
-                              <p className="opacity-80 flex justify-between"><span>Guests:</span> <span>{booking.guestCount || '-'}</span></p>
-                              <div className="pt-1 mt-1 border-t border-white/10">
-                                <p className="opacity-80 flex justify-between"><span>Platform:</span> <span className="font-bold">{badgeLabel}</span></p>
-                                {accountName && (
-                                  <p className="opacity-80 flex justify-between"><span>Account:</span> <span className="text-gray-300">{accountName}</span></p>
+                        {/* Tooltip — enriched bookings only */}
+                        {isEnriched && (
+                          <div className={`absolute left-1/2 -translate-x-1/2 hidden group-hover:block z-50 min-w-[180px] ${rowIdx === 0 ? 'top-full mt-2' : 'bottom-full mb-2'}`}>
+                            <div className="bg-gray-900 text-white text-xs rounded-lg py-3 px-3 shadow-xl ring-1 ring-white/10">
+                              <p className="font-bold text-sm mb-1.5">{displayGuestName}</p>
+                              <div className="space-y-1 text-left">
+                                <p className="opacity-80 flex justify-between"><span>Guests:</span> <span>{displayGuestCount || '-'}</span></p>
+                                <p className="opacity-80 flex justify-between"><span>Check-in:</span> <span className="font-mono">{new Date(booking.startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).replace(/, /, '-').replace(' ', '-')}</span></p>
+                                <p className="opacity-80 flex justify-between"><span>Check-out:</span> <span className="font-mono">{new Date(booking.endDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).replace(/, /, '-').replace(' ', '-')}</span></p>
+                                {labelText && (
+                                  <p className="opacity-80 flex justify-between pt-1 mt-1 border-t border-white/10"><span>Source:</span> <span className="font-bold">{labelText}</span></p>
                                 )}
                               </div>
                             </div>
+                            <div className={`w-2 h-2 bg-gray-900 transform rotate-45 mx-auto absolute left-0 right-0 ${rowIdx === 0 ? '-top-1' : '-bottom-1'}`}></div>
                           </div>
-                          <div className={`w-2 h-2 bg-gray-900 transform rotate-45 mx-auto absolute left-0 right-0 ${rowIdx === 0 ? '-top-1' : '-bottom-1'}`}></div>
-                        </div>
+                        )}
                       </div>
-                    );
-                  });
+                    </div>
+                  );
                 })}
               </React.Fragment>
             );
@@ -692,12 +1043,148 @@ export default function CalendarPage() {
         </div>
 
         {/* Loading Indicator at End */}
-        {loadingMore && (
-          <div className="flex justify-center py-4 bg-gray-50 border-t border-gray-100">
-            <span className="text-sm text-gray-500 animate-pulse">Loading future dates...</span>
-          </div>
-        )}
+        {
+          loadingMore && (
+            <div className="flex justify-center py-4 bg-gray-50 border-t border-gray-100">
+              <span className="text-sm text-gray-500 animate-pulse">Loading future dates...</span>
+            </div>
+          )
+        }
       </div>
+
+      {/* Resolution Modal */}
+      {resolveBooking && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setResolveBooking(null)}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">Resolve Booking</h2>
+              <button onClick={() => setResolveBooking(null)} className="text-gray-400 hover:text-gray-600">
+                <XMarkIcon className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Booking Info (Read-Only) */}
+            <div className="bg-gray-50 rounded-lg p-3 mb-4 text-sm">
+              <div className="flex justify-between mb-1">
+                <span className="text-gray-500">Check-in:</span>
+                <span className="font-mono font-medium">{resolveBooking.startDate}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Check-out:</span>
+                <span className="font-mono font-medium">{resolveBooking.endDate}</span>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-2 italic">Dates are from iCal and cannot be edited</p>
+            </div>
+
+            {/* Connection/Label Dropdown */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Connection / Label</label>
+              <select
+                value={resolutionForm.connectionId}
+                onChange={e => setResolutionForm(prev => ({ ...prev, connectionId: e.target.value }))}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">Select a connection...</option>
+                {connections.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Guest Name */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Guest Name</label>
+              <input
+                type="text"
+                value={resolutionForm.guestName}
+                onChange={e => setResolutionForm(prev => ({ ...prev, guestName: e.target.value }))}
+                placeholder="e.g. John D."
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Guest Count */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Guest Count</label>
+              <input
+                type="number"
+                min="1"
+                value={resolutionForm.guestCount}
+                onChange={e => setResolutionForm(prev => ({ ...prev, guestCount: e.target.value }))}
+                placeholder="e.g. 4"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Notes */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Internal Notes</label>
+              <textarea
+                value={resolutionForm.notes}
+                onChange={e => setResolutionForm(prev => ({ ...prev, notes: e.target.value }))}
+                placeholder="Optional notes..."
+                rows={2}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setResolveBooking(null)}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setSavingResolution(true);
+                  try {
+                    const { error } = await supabase
+                      .from('bookings')
+                      .update({
+                        manual_connection_id: resolutionForm.connectionId || null,
+                        manual_guest_name: resolutionForm.guestName || null,
+                        manual_guest_count: resolutionForm.guestCount ? parseInt(resolutionForm.guestCount) : null,
+                        manual_notes: resolutionForm.notes || null,
+                        manually_resolved_at: new Date().toISOString()
+                      })
+                      .eq('id', resolveBooking.id);
+
+                    if (error) throw error;
+
+                    // Update local state
+                    setBookings(prev => prev.map(b =>
+                      b.id === resolveBooking.id
+                        ? {
+                          ...b,
+                          manualConnectionId: resolutionForm.connectionId || undefined,
+                          manualGuestName: resolutionForm.guestName || undefined,
+                          manualGuestCount: resolutionForm.guestCount ? parseInt(resolutionForm.guestCount) : undefined,
+                          manualNotes: resolutionForm.notes || undefined,
+                          manuallyResolvedAt: new Date().toISOString()
+                        }
+                        : b
+                    ));
+
+                    setResolveBooking(null);
+                    setResolutionForm({ connectionId: '', guestName: '', guestCount: '', notes: '' });
+                  } catch (err) {
+                    console.error('Failed to save resolution:', err);
+                    alert('Failed to save resolution');
+                  } finally {
+                    setSavingResolution(false);
+                  }
+                }}
+                disabled={savingResolution}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {savingResolution ? 'Saving...' : 'Save Resolution'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
