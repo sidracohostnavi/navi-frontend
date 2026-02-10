@@ -774,6 +774,7 @@ export default function CalendarPage() {
                   }
                   return Array.from(dedupMap.values());
                 })().map((booking, _idx, dedupedBookings) => {
+                  if (!rangeStart) return null;
                   let { start, span, isVisible } = getGridPosition(booking, rangeStart, loadedDays);
                   if (!isVisible) return null;
 
