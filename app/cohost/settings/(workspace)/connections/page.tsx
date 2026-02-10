@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
@@ -35,7 +35,7 @@ type Connection = {
     } | null;
 };
 
-export default function ConnectionsSettingsPage() {
+function ConnectionsSettingsPageInner() {
     const supabase = createClient();
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -537,14 +537,14 @@ export default function ConnectionsSettingsPage() {
             {toast && (
                 <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-top-2 max-w-md">
                     <div className={`rounded-lg shadow-lg border px-4 py-3 flex items-start gap-3 ${toast.type === 'success' ? 'bg-green-50 border-green-200' :
-                            toast.type === 'error' ? 'bg-red-50 border-red-200' :
-                                toast.type === 'warning' ? 'bg-amber-50 border-amber-200' :
-                                    'bg-blue-50 border-blue-200'
+                        toast.type === 'error' ? 'bg-red-50 border-red-200' :
+                            toast.type === 'warning' ? 'bg-amber-50 border-amber-200' :
+                                'bg-blue-50 border-blue-200'
                         }`}>
                         <div className={`flex-shrink-0 text-lg ${toast.type === 'success' ? 'text-green-600' :
-                                toast.type === 'error' ? 'text-red-600' :
-                                    toast.type === 'warning' ? 'text-amber-600' :
-                                        'text-blue-600'
+                            toast.type === 'error' ? 'text-red-600' :
+                                toast.type === 'warning' ? 'text-amber-600' :
+                                    'text-blue-600'
                             }`}>
                             {toast.type === 'success' ? '✓' :
                                 toast.type === 'error' ? '✕' :
@@ -552,17 +552,17 @@ export default function ConnectionsSettingsPage() {
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className={`font-medium text-sm ${toast.type === 'success' ? 'text-green-800' :
-                                    toast.type === 'error' ? 'text-red-800' :
-                                        toast.type === 'warning' ? 'text-amber-800' :
-                                            'text-blue-800'
+                                toast.type === 'error' ? 'text-red-800' :
+                                    toast.type === 'warning' ? 'text-amber-800' :
+                                        'text-blue-800'
                                 }`}>
                                 {toast.message}
                             </p>
                             {toast.details && (
                                 <p className={`mt-0.5 text-xs ${toast.type === 'success' ? 'text-green-600' :
-                                        toast.type === 'error' ? 'text-red-600' :
-                                            toast.type === 'warning' ? 'text-amber-600' :
-                                                'text-blue-600'
+                                    toast.type === 'error' ? 'text-red-600' :
+                                        toast.type === 'warning' ? 'text-amber-600' :
+                                            'text-blue-600'
                                     }`}>
                                     {toast.details}
                                 </p>
@@ -1033,5 +1033,13 @@ export default function ConnectionsSettingsPage() {
                 </div>
             )}
         </>
+    );
+}
+
+export default function ConnectionsSettingsPage() {
+    return (
+        <Suspense fallback={<div className="p-8 text-center text-gray-400">Loading...</div>}>
+            <ConnectionsSettingsPageInner />
+        </Suspense>
     );
 }
