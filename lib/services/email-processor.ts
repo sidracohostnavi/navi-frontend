@@ -115,7 +115,7 @@ export class EmailProcessor {
             return [];
         }
 
-        const existingSet = new Set(existingRows?.map(r => r.gmail_message_id) || []);
+        const existingSet = new Set(existingRows?.map((r: { gmail_message_id: string }) => r.gmail_message_id) || []);
         const missingIds = allMessageIds.filter(id => !existingSet.has(id));
 
         console.log(`[EmailProcessor] Sync Status: Total=${allMessageIds.length}, Existing=${existingSet.size}, New/Missing=${missingIds.length}`);
@@ -220,7 +220,7 @@ export class EmailProcessor {
 
     static async processMessages(connectionId: string, messages?: any[], supabaseClient?: any) {
         const supabase = supabaseClient || await createClient();
-        const results = [];
+        const results: any[] = [];
         let msgsToProcess = messages || [];
 
         // If no messages provided, fetch them (which now invokes pagination + diffing)
@@ -491,7 +491,7 @@ export class EmailProcessor {
             .select('property_id')
             .eq('connection_id', connectionId);
 
-        const propertyIds = connProps ? connProps.map(cp => cp.property_id) : [];
+        const propertyIds = connProps ? connProps.map((cp: { property_id: string }) => cp.property_id) : [];
         if (propertyIds.length === 0) {
             console.warn(`[EmailProcessor] No linked properties.`);
             return { enriched: 0, missing: 0 };
@@ -525,7 +525,7 @@ export class EmailProcessor {
 
             // A. Strict Confirmation Code Match
             if (fact.confirmation_code && fact.confirmation_code.length >= 6) {
-                targetBooking = candidateBookings.find(b =>
+                targetBooking = candidateBookings.find((b: any) =>
                     b.reservation_code === fact.confirmation_code ||
                     (b.raw_data && JSON.stringify(b.raw_data).includes(fact.confirmation_code)) ||
                     (b.guest_name && b.guest_name.includes(fact.confirmation_code))
@@ -538,7 +538,7 @@ export class EmailProcessor {
                 const factIn = fact.check_in;
                 const factOut = fact.check_out;
 
-                const dateMatches = candidateBookings.filter(b => {
+                const dateMatches = candidateBookings.filter((b: any) => {
                     const bIn = new Date(b.check_in).toISOString().split('T')[0];
                     const bOut = new Date(b.check_out).toISOString().split('T')[0];
                     return bIn === factIn && bOut === factOut;
@@ -549,7 +549,7 @@ export class EmailProcessor {
                     matchReason = 'Unique Date';
                 } else if (dateMatches.length > 1) {
                     // Check Property Ambiguity
-                    const distinctProps = new Set(dateMatches.map(b => b.property_id));
+                    const distinctProps = new Set(dateMatches.map((b: any) => b.property_id));
                     if (distinctProps.size > 1) {
                         console.warn(`[EmailProcessor] ❌ Ambiguity Block: Fact ${fact.id} matches multiple properties: ${Array.from(distinctProps).join(', ')}`);
                         // Cannot assign safely
