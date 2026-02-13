@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       {
+        source: '/',
+        has: [
+          { type: 'host', value: 'cohostnavi.com' }
+        ],
+        destination: '/cohost',
+        permanent: false,
+      },
+      {
         source: '/join',
         destination: '/auth/signup',
         permanent: true,
