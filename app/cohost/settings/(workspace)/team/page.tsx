@@ -146,7 +146,7 @@ export default function TeamSettingsPage() {
         ) : (
           <div className="space-y-3">
             {members.map(m => (
-              <div key={m.id} className="flex items-center justify-between">
+              <div key={m.id || m.user_id} className="flex items-center justify-between">
                 <div>
                   <div className="font-medium">{m.email || m.user_id}</div>
                   <div className="text-xs text-gray-500">{m.role_label || m.role}</div>
