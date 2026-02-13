@@ -31,24 +31,6 @@ const nextConfig: NextConfig = {
       }
     ]
   },
-  async rewrites() {
-    return [
-      {
-        source: '/',
-        has: [
-          { type: 'host', value: 'cohostnavi.com' },
-        ],
-        destination: '/cohost',
-      },
-      {
-        source: '/',
-        has: [
-          { type: 'host', value: 'www.cohostnavi.com' },
-        ],
-        destination: '/cohost',
-      },
-    ];
-  },
 };
 
 export default nextConfig;
