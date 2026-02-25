@@ -23,7 +23,7 @@ CREATE POLICY "Users can view their workspace gmail sync logs"
     USING (
         workspace_id IN (
             SELECT workspace_id 
-            FROM public.workspace_users 
+            FROM public.cohost_workspace_members 
             WHERE user_id = auth.uid()
         )
     );
