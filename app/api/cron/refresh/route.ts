@@ -4,6 +4,7 @@ import { ICalProcessor } from '@/lib/services/ical-processor';
 import { EmailProcessor } from '@/lib/services/email-processor';
 import { DBLock } from '@/lib/utils/db-lock';
 
+export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // Allow 5 minutes for cron
 
