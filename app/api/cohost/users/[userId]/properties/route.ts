@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
 import { getCurrentUserWithWorkspace } from '@/lib/supabase/authServer';
 
-export async function GET(request: NextRequest, { params }: { params: { userId: string } }) {
+export async function GET(request: NextRequest, props: { params: Promise<{ userId: string }> }) {
+    const params = await props.params;
     const { user, workspaceId } = await getCurrentUserWithWorkspace();
     if (!user || !workspaceId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -31,7 +32,8 @@ export async function GET(request: NextRequest, { params }: { params: { userId: 
     return NextResponse.json({ propertyIds: (data || []).map((d: any) => d.property_id) });
 }
 
-export async function POST(request: NextRequest, { params }: { params: { userId: string } }) {
+export async function POST(request: NextRequest, props: { params: Promise<{ userId: string }> }) {
+    const params = await props.params;
     const { user, workspaceId } = await getCurrentUserWithWorkspace();
     if (!user || !workspaceId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
