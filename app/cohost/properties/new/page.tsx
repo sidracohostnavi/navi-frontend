@@ -202,28 +202,37 @@ function NewPropertyWizardInner() {
             membershipData = membership;
 
             if (!membershipData) {
-                console.log("No workspace found, auto-creating...");
-                // Create default workspace
-                const wsSlug = `ws-${Date.now()}`;
-                const { data: newWs, error: wsError } = await supabase.from('cohost_workspaces').insert({
-                    name: 'My Workspace',
-                    slug: wsSlug,
-                    owner_id: user.id
-                }).select('id').single();
+                console.log("No workspace found, ensuring idempotent workspace...");
+                const wsSlug = `ws-${user.id}`;
 
-                if (wsError) throw wsError;
+                const { error: upsertError } = await supabase
+                    .from('cohost_workspaces')
+                    .upsert({
+                        owner_id: user.id,
+                        name: 'My Workspace',
+                        slug: wsSlug
+                    }, { onConflict: 'slug', ignoreDuplicates: true });
+
+                if (upsertError) throw upsertError;
+
+                const { data: existingWs, error: wsError } = await supabase
+                    .from('cohost_workspaces')
+                    .select('id')
+                    .eq('slug', wsSlug)
+                    .single();
+
+                if (wsError || !existingWs) throw wsError || new Error('Workspace lookup failed');
 
                 // Add member (self)
-                // Note: Policy update 010 allows this
-                const { error: memError } = await supabase.from('cohost_workspace_members').insert({
-                    workspace_id: newWs.id,
+                const { error: memError } = await supabase.from('cohost_workspace_members').upsert({
+                    workspace_id: existingWs.id,
                     user_id: user.id,
                     role: 'owner'
-                });
+                }, { onConflict: 'workspace_id, user_id' });
 
                 if (memError) throw memError;
 
-                membershipData = { workspace_id: newWs.id };
+                membershipData = { workspace_id: existingWs.id };
             }
 
             const { error } = await supabase.from('cohost_properties').insert({

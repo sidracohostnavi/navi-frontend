@@ -64,59 +64,10 @@ export async function ensureWorkspace(userId: string): Promise<string | null> {
         return existingMember.workspace_id
     }
 
-    // 3. Create New Workspace
-    console.log(`[ensureWorkspace] NO EXISTING WORKSPACE - WILL CREATE NEW ONE`);
-
-    // Get user email for workspace name
-    const { data: { user } } = await supabase.auth.getUser()
-    const email = user?.email || 'User'
-
-    // Create workspace
-    const { data: workspace, error: wsError } = await serviceClient
-        .from('cohost_workspaces')
-        .insert({
-            name: `${email}'s Workspace`,
-        })
-        .select('id')
-        .single()
-
-    if (wsError || !workspace) {
-        console.error('Failed to create workspace:', wsError)
-        return null
-    }
-
-    // Add user as workspace owner
-    const { error: addMemberError } = await serviceClient
-        .from('cohost_workspace_members')
-        .insert({
-            workspace_id: workspace.id,
-            user_id: userId,
-            role: 'owner',
-        })
-
-    if (addMemberError) {
-        console.error('Failed to add workspace member:', addMemberError)
-        return null
-    }
-
-    // Create default automation settings
-    await serviceClient
-        .from('cohost_automation_settings')
-        .insert({
-            workspace_id: workspace.id,
-            automation_level: 1,
-        })
-
-    // LOCK IT: Set preference
-    await serviceClient
-        .from('cohost_user_preferences')
-        .upsert({
-            user_id: userId,
-            workspace_id: workspace.id,
-            updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id' });
-
-    return workspace.id
+    // No workspace found — user has no access to CoHost
+    // Workspace creation should ONLY happen via explicit onboarding, never auto-created
+    console.log(`[ensureWorkspace] No workspace found for user ${userId}. Access denied.`);
+    return null;
 }
 
 /**

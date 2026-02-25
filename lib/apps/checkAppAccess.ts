@@ -26,7 +26,7 @@ export async function checkAppAccess(
         if (!workspaceId) {
             return {
                 hasAccess: false,
-                redirectUrl: '/auth/login?error=workspace_setup_failed',
+                redirectUrl: '/cohost',
             }
         }
 

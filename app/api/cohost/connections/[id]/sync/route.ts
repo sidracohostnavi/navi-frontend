@@ -114,6 +114,14 @@ export async function POST(
     } catch (err: any) {
         console.error('[Sync] Error:', err);
 
+        if (connectionId === '5fb5a1c7-916d-457b-9c39-2ce92e185a6f') {
+            console.error('[TEMP LOG] Exception for 5fb5a1c7:', {
+                message: err?.message,
+                stack: err?.stack,
+                cause: err?.cause
+            });
+        }
+
         // Structured End Log (Failure)
         console.error(JSON.stringify({
             event: 'sync_run_end',

@@ -41,12 +41,28 @@ export async function POST(request: NextRequest) {
     const serviceClient = createCohostServiceClient()
     
     // Create workspace
+    const slug = `ws-${userId}`;
+
+    const { error: upsertError } = await serviceClient
+      .from('cohost_workspaces')
+      .upsert({
+        owner_id: userId,
+        name: workspaceName || `${email}'s Workspace`,
+        slug,
+      }, { onConflict: 'slug', ignoreDuplicates: true });
+
+    if (upsertError) {
+      console.error('Failed to upsert workspace:', upsertError)
+      return NextResponse.json(
+        { error: 'Failed to create workspace' },
+        { status: 500 }
+      )
+    }
+
     const { data: workspace, error: wsError } = await serviceClient
       .from('cohost_workspaces')
-      .insert({
-        name: workspaceName || `${email}'s Workspace`,
-      })
       .select('id')
+      .eq('slug', slug)
       .single()
     
     if (wsError || !workspace) {
@@ -60,11 +76,11 @@ export async function POST(request: NextRequest) {
     // Add user as workspace owner
     const { error: memberError } = await serviceClient
       .from('cohost_workspace_members')
-      .insert({
+      .upsert({
         workspace_id: workspace.id,
         user_id: userId,
         role: 'owner',
-      })
+      }, { onConflict: 'workspace_id, user_id' })
     
     if (memberError) {
       console.error('Failed to add workspace member:', memberError)

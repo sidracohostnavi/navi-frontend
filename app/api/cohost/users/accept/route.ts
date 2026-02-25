@@ -30,22 +30,49 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invite email mismatch' }, { status: 403 });
   }
 
-  await service
+  // Validate role against allowed values in the database CHECK constraint
+  const VALID_ROLES = ['owner', 'admin', 'manager', 'cleaner'];
+  const assignedRole = invite.role && VALID_ROLES.includes(invite.role) ? invite.role : 'cleaner';
+
+  console.log('[accept] DEBUG invite.role:', JSON.stringify(invite.role), 'assignedRole:', assignedRole, 'role_label:', JSON.stringify(invite.role_label));
+
+  // 1. Create/update membership in the INVITER's workspace
+  const { error: memberError } = await service
     .from('cohost_workspace_members')
     .upsert({
       workspace_id: invite.workspace_id,
       user_id: user.id,
-      role: 'member',
-      role_label: invite.role_label,
-      can_view_calendar: invite.can_view_calendar,
-      can_view_guest_name: invite.can_view_guest_name,
-      can_view_guest_count: invite.can_view_guest_count,
-      can_view_booking_notes: invite.can_view_booking_notes,
-      can_view_contact_info: invite.can_view_contact_info,
+      role: assignedRole,
+      role_label: invite.role_label || assignedRole,
+      can_view_calendar: invite.can_view_calendar ?? true,
+      can_view_guest_name: invite.can_view_guest_name ?? false,
+      can_view_guest_count: invite.can_view_guest_count ?? false,
+      can_view_booking_notes: invite.can_view_booking_notes ?? false,
+      can_view_contact_info: invite.can_view_contact_info ?? false,
       is_active: true,
     }, { onConflict: 'workspace_id, user_id' });
 
-  await service
+  if (memberError) {
+    console.error('[accept] Failed to create membership:', memberError);
+    return NextResponse.json({ error: 'Failed to create membership', details: memberError.message }, { status: 500 });
+  }
+
+  // 2. Set workspace preference to the INVITER's workspace
+  const { error: prefError } = await service
+    .from('cohost_user_preferences')
+    .upsert({
+      user_id: user.id,
+      workspace_id: invite.workspace_id,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+
+  if (prefError) {
+    console.error('[accept] Failed to set workspace preference:', prefError);
+    return NextResponse.json({ error: 'Failed to set workspace preference', details: prefError.message }, { status: 500 });
+  }
+
+  // 3. Mark invite as accepted (ONLY after membership + preference succeed)
+  const { error: updateError } = await service
     .from('cohost_workspace_invites')
     .update({
       status: 'accepted',
@@ -53,6 +80,10 @@ export async function POST(request: NextRequest) {
       accepted_by: user.id,
     })
     .eq('id', invite.id);
+
+  if (updateError) {
+    console.error('[accept] Failed to update invite status:', updateError);
+  }
 
   return NextResponse.json({ success: true, workspace_id: invite.workspace_id });
 }

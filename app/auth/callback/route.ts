@@ -42,8 +42,12 @@ export async function GET(request: NextRequest) {
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      console.log('Auth callback success (Code), redirecting to:', next);
-      return NextResponse.redirect(`${requestUrl.origin}${next}`);
+      console.log('[Auth Callback] Code exchange success');
+      console.log('[Auth Callback] Redirecting to:', next);
+      // Ensure we don't double-slash or mess up query params
+      const target = next.startsWith('http') ? next : `${requestUrl.origin}${next}`;
+      console.log('[Auth Callback] Final Target URL:', target);
+      return NextResponse.redirect(target);
     } else {
       console.error('Auth Code Exchange Error:', error);
       return NextResponse.redirect(`${requestUrl.origin}/auth/login?error=${encodeURIComponent(error.message)}`);
@@ -58,7 +62,8 @@ export async function GET(request: NextRequest) {
     })
     if (!error) {
       console.log('Auth callback success (Token), redirecting to:', next);
-      return NextResponse.redirect(`${requestUrl.origin}${next}`);
+      const target = next.startsWith('http') ? next : `${requestUrl.origin}${next}`;
+      return NextResponse.redirect(target);
     } else {
       console.error('Auth Token Verify Error:', error);
       return NextResponse.redirect(`${requestUrl.origin}/auth/login?error=${encodeURIComponent(error.message)}`);

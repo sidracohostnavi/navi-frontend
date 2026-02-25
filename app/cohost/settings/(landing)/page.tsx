@@ -1,9 +1,30 @@
 'use client';
 
 import Link from 'next/link';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { getPermissionsForRole } from '@/lib/roles/roleConfig';
 
 export default function CoHostSettingsLayout() {
+  const router = useRouter();
+
+  useEffect(() => {
+    async function checkAccess() {
+      try {
+        const res = await fetch('/api/cohost/users/role');
+        if (res.ok) {
+          const data = await res.json();
+          const perms = getPermissionsForRole(data.role);
+          if (!perms.canViewSettingsTab) {
+            // Redirect to the only settings page they can likely see
+            router.replace('/cohost/settings/profile');
+          }
+        }
+      } catch { }
+    }
+    checkAccess();
+  }, [router]);
+
   const SETTINGS_CARDS = [
     {
       title: 'Connections',
@@ -38,7 +59,7 @@ export default function CoHostSettingsLayout() {
     {
       title: 'Team Members',
       description: 'Invite co-hosts and cleaners to your workspace.',
-      href: '#', // Placeholder
+      href: '/cohost/settings/team',
       icon: (
         <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />

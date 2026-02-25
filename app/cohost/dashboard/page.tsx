@@ -4,6 +4,7 @@ import { Calendar, MessageSquare, ClipboardList, Settings, Home, Plus } from 'lu
 import { createClient } from '@/lib/supabase/server';
 import { ensureWorkspace } from '@/lib/workspaces/ensureWorkspace';
 import { redirect } from 'next/navigation';
+import { getPermissionsForRole, isValidRole } from '@/lib/roles/roleConfig';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,7 +76,8 @@ export default async function CoHostDashboardPage() {
     const workspaceId = await ensureWorkspace(user.id);
 
     if (!workspaceId) {
-        redirect('/auth/login?error=workspace_setup_failed');
+        // User has no workspace — they're not a CoHost customer or team member
+        redirect('/cohost');
     }
 
     const { data: workspace } = await supabase
@@ -88,14 +90,36 @@ export default async function CoHostDashboardPage() {
         redirect('/auth/login?error=workspace_not_found');
     }
 
-    const navItems = [
+    // Fetch user's role in this workspace for nav filtering
+    const { data: membership } = await supabase
+        .from('cohost_workspace_members')
+        .select('role')
+        .eq('workspace_id', workspaceId)
+        .eq('user_id', user.id)
+        .single();
+
+    const role = isValidRole(membership?.role) ? membership.role : 'cleaner';
+    const perms = getPermissionsForRole(role);
+
+    // Redirect if user is not allowed to view dashboard
+    if (!perms.canViewDashboard) {
+        if (perms.canViewCalendar) {
+            redirect('/cohost/calendar');
+        } else {
+            // Fallback for weird roles
+            redirect('/cohost/settings/profile');
+        }
+    }
+
+    const allNavItems = [
         {
             title: 'Calendar',
             description: 'Manage availability and reservations',
             icon: Calendar,
             href: '/cohost/calendar',
             color: 'text-purple-600',
-            bg: 'bg-purple-50'
+            bg: 'bg-purple-50',
+            permKey: 'canViewCalendar' as const,
         },
         {
             title: 'Messaging',
@@ -103,7 +127,8 @@ export default async function CoHostDashboardPage() {
             icon: MessageSquare,
             href: '/cohost/messaging',
             color: 'text-blue-600',
-            bg: 'bg-blue-50'
+            bg: 'bg-blue-50',
+            permKey: 'canViewMessaging' as const,
         },
         {
             title: 'Daily Ops',
@@ -111,7 +136,8 @@ export default async function CoHostDashboardPage() {
             icon: ClipboardList,
             href: '/cohost/dailyops',
             color: 'text-orange-600',
-            bg: 'bg-orange-50'
+            bg: 'bg-orange-50',
+            permKey: 'canViewDashboard' as const,
         },
         {
             title: 'Settings',
@@ -119,9 +145,13 @@ export default async function CoHostDashboardPage() {
             icon: Settings,
             href: '/cohost/settings',
             color: 'text-gray-600',
-            bg: 'bg-gray-50'
+            bg: 'bg-gray-50',
+            permKey: 'canViewSettingsTab' as const,
         }
     ];
+
+    // Filter nav items by role permissions
+    const navItems = allNavItems.filter(item => perms[item.permKey]);
 
     return (
         <div className="max-w-5xl mx-auto py-8 px-4">

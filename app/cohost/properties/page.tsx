@@ -14,6 +14,8 @@ type Property = {
     state?: string;
 };
 
+import { getPermissionsForRole } from '@/lib/roles/roleConfig';
+
 export default function PropertiesPage() {
     const supabase = createClient();
     const router = useRouter();
@@ -31,6 +33,17 @@ export default function PropertiesPage() {
     useEffect(() => {
         async function fetchProperties() {
             try {
+                // Check permissions first
+                const roleRes = await fetch('/api/cohost/users/role');
+                if (roleRes.ok) {
+                    const roleData = await roleRes.json();
+                    const perms = getPermissionsForRole(roleData.role);
+                    if (!perms.canViewProperties) {
+                        router.replace('/cohost/calendar');
+                        return;
+                    }
+                }
+
                 const { data } = await supabase
                     .from('cohost_properties')
                     .select('id, name, image_url, city, state')
@@ -43,7 +56,7 @@ export default function PropertiesPage() {
             }
         }
         fetchProperties();
-    }, []);
+    }, [router, supabase]);
 
     const handleImport = async () => {
         setUrlError('');

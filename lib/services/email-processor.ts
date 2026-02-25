@@ -285,7 +285,7 @@ export class EmailProcessor {
                         original_msg: msg,
                         classification
                     },
-                    processed_at: new Date().toISOString()
+                    processed_at: classification.message_type === 'reservation_confirmation' ? null : new Date().toISOString()
                 });
 
             if (msgError) {
@@ -318,6 +318,15 @@ export class EmailProcessor {
             if (!fact) {
                 // breakdown handled inside parseReservationEmail
                 console.warn(`[EmailProcessor] Failed to parse confirmed candidate: ${msg.subject}`);
+                await supabase.from('gmail_messages').update({
+                    raw_metadata: {
+                        full_text: msg.bodyText,
+                        full_html: msg.bodyHtml,
+                        original_msg: msg,
+                        classification,
+                        parse_error: 'parseReservationEmail returned null'
+                    }
+                }).eq('gmail_message_id', msg.gmail_message_id);
                 continue;
             }
 
@@ -326,6 +335,16 @@ export class EmailProcessor {
             if (validationError) {
                 stats.rejected_invalid++;
                 console.warn(`[EmailProcessor] Validation failed for ${msg.gmail_message_id}: ${validationError}`);
+
+                await supabase.from('gmail_messages').update({
+                    raw_metadata: {
+                        full_text: msg.bodyText,
+                        full_html: msg.bodyHtml,
+                        original_msg: msg,
+                        classification,
+                        parse_error: validationError
+                    }
+                }).eq('gmail_message_id', msg.gmail_message_id);
 
                 if (validationError.includes('guest name')) stats.validation_fail_name++;
                 else if (validationError.includes('dates')) stats.validation_fail_date++;
@@ -340,6 +359,18 @@ export class EmailProcessor {
             const sourceGmailId = msg.gmail_message_id; // Canonical ID
             if (!sourceGmailId) {
                 console.error(`[EmailProcessor] CRITICAL: Missing gmail_message_id for ${msg.subject}`);
+                continue;
+            }
+
+            const { data: existingFact } = await supabase
+                .from('reservation_facts')
+                .select('id')
+                .eq('source_gmail_message_id', sourceGmailId)
+                .single();
+
+            if (existingFact) {
+                console.log(`[EmailProcessor] Fact already exists for ${sourceGmailId}, skipping insert.`);
+                await supabase.from('gmail_messages').update({ processed_at: new Date().toISOString() }).eq('gmail_message_id', sourceGmailId);
                 continue;
             }
 
@@ -362,6 +393,7 @@ export class EmailProcessor {
                 console.error(`[EmailProcessor] Error storing fact:`, factError);
             } else {
                 stats.facts_created++;
+                await supabase.from('gmail_messages').update({ processed_at: new Date().toISOString() }).eq('gmail_message_id', sourceGmailId);
                 // console.log(`[EmailProcessor] ✅ Fact Upserted: ${fact.guest_name} (${fact.check_in})`);
             }
         }
@@ -418,8 +450,8 @@ export class EmailProcessor {
     }
 
     private static validateReservationFact(fact: ExtractedFact): string | null {
-        // Guest Count 1-12 (only validate if present)
-        if (fact.guest_count !== null && (fact.guest_count < 1 || fact.guest_count > 12)) {
+        // Guest Count 1-30 (only validate if present)
+        if (fact.guest_count !== null && (fact.guest_count < 1 || fact.guest_count > 30)) {
             return `Invalid guest count: ${fact.guest_count}`;
         }
 
@@ -612,8 +644,8 @@ export class EmailProcessor {
                 }
 
                 // Enrich (Re-hydration)
-                const firstName = fact.guest_name.split(' ')[0];
-                const lastInitial = fact.guest_name.split(' ').length > 1 ? fact.guest_name.split(' ').pop()?.replace('.', '') : '';
+                const firstName = fact.guest_name ? fact.guest_name.split(' ')[0] : null;
+                const lastInitial = fact.guest_name && fact.guest_name.split(' ').length > 1 ? fact.guest_name.split(' ').pop()?.replace('.', '') : '';
                 const displayName = `${firstName} ${lastInitial ? lastInitial + '.' : ''}`;
 
                 // Update booking
@@ -787,6 +819,8 @@ export class EmailProcessor {
                         .replace(/&nbsp;/g, ' ');
                 } else if (raw.full_text) {
                     bodyToParse = raw.full_text;
+                } else if (raw.original_msg?.bodyText) {
+                    bodyToParse = raw.original_msg.bodyText;
                 } else {
                     bodyToParse = email.snippet || '';
                 }
@@ -1041,6 +1075,14 @@ export class EmailProcessor {
             }
 
 
+            // G. Body: "Arrival:" (Lodgify template fallback)
+            if (!check_in) {
+                const lodgifyArrival = body.match(/Arrival:\s+([A-Za-z]{3,9}\s+\d{1,2}(?:[,\s]+\d{4})?)/i);
+                if (lodgifyArrival) {
+                    check_in = parseDate(lodgifyArrival[1]) || '';
+                }
+            }
+
             // NOTE: If check_out is still empty here, the fact will be stored without it.
             // The existing review inbox flow in processMessages() will flag facts
             // that cannot match a booking, so the user can resolve manually.
@@ -1063,7 +1105,7 @@ export class EmailProcessor {
                 const match = body.match(pattern);
                 if (match) {
                     const count = parseInt(match[1]);
-                    if (count >= 1 && count <= 20) {
+                    if (count >= 1 && count <= 30) {
                         guest_count = count;
                         break;
                     }

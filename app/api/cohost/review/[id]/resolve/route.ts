@@ -98,6 +98,7 @@ export async function POST(request: Request, context: RouteContext) {
                 .select('id')
                 .eq('property_id', property_id)
                 .eq('reservation_code', confirmationCode)
+                .eq('is_active', true)
                 .single();
 
             if (existingBooking) {

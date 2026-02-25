@@ -32,13 +32,14 @@ sequenceDiagram
 
 ## Core Components
 
-### 1. The Edge Gatekeeper (`middleware.ts`)
-This is the first line of defense. It runs on Vercel's Edge Network.
+### 1. The Edge Gatekeeper (`proxy.ts`)
+This is the first line of defense. It runs on Vercel's Edge Network (using Next.js 16 conventions).
 - **Why here?** To prevent unauthenticated requests from even hitting our React server components or database connections. It is fast and cheap.
 - **Logic:**
   1. Checks if path is `PUBLIC_ROUTES`.
   2. If not, checks `supabase.auth.getUser()`.
   3. If invalid, redirects to Login.
+- **Invariant:** `proxy.ts` is the edge gatekeeper; do not reintroduce `middleware.ts`.
 
 ### 2. The Identity Provider (Supabase Auth)
 We outsource identity management to Supabase (GoTrue).

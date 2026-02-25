@@ -62,6 +62,7 @@ The heart of the system. It runs purely on the backend (Next.js API Routes).
     3. Transforms "events" into "bookings".
     4. **Enrichment:** Attempts to find a matching "Reservation Fact" (from Gmail parsing) to replace "Blocked" with "Guest Name".
 - **Output:** Writes to `bookings` table.
+- **Invariant:** Only `ICalProcessor` (via iCal feed) allows creation of bookings. Enrichment (Gmail) is strictly read-only for metadata and MUST NEVER create or delete bookings. The `bookings` table is the Source of Truth for *availability/display*, but the iCal feed is the *upstream* Source of Truth.
 
 ### 2. The Enrichment Layer
 Bridging the gap between "blind" iCals and "rich" Emails.

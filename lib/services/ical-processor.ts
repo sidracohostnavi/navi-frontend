@@ -172,7 +172,10 @@ export class ICalProcessor {
 
                 if (matchedFact) {
                     enriched = true;
-                    guestName = matchedFact.guest_name;
+                    // Only override if the fact actually has a non-empty guest_name
+                    if (matchedFact.guest_name && matchedFact.guest_name.trim() !== '') {
+                        guestName = matchedFact.guest_name;
+                    }
                     guestCount = matchedFact.guest_count || 1;
                     // If enriched via email parser, we usually know it's Airbnb from the parser logic,
                     // but we should technically trust the FEED SOURCE NAME if the user set it (e.g. "My Airbnb").
@@ -184,16 +187,18 @@ export class ICalProcessor {
                         if (parts.length > 1) guestLastInitial = parts[1].replace('.', '');
                     }
                 } else {
-                    if (summary.includes('Reserved') || summary.toLowerCase().includes('blocking')) {
+                    if (summary && (summary.includes('Reserved') || summary.toLowerCase().includes('blocking'))) {
                         guestName = 'Reserved';
                     }
                 }
 
                 // 6. Preserve existing real guest names (don't overwrite with masked names)
-                const isMaskedName = (n: string) =>
-                    ['Reserved', 'Blocked', 'Not available', 'Unknown', 'Private'].some(m =>
+                const isMaskedName = (n: string | null | undefined) => {
+                    if (!n) return false;
+                    return ['Reserved', 'Blocked', 'Not available', 'Unknown', 'Private'].some(m =>
                         n.toLowerCase() === m.toLowerCase() || n.toLowerCase().startsWith(m.toLowerCase())
                     );
+                };
 
                 // Check if booking already exists with a real (non-masked) guest name
                 if (isMaskedName(guestName)) {
@@ -240,7 +245,7 @@ export class ICalProcessor {
                         source_feed_id: feed.id,
                         is_active: true
                     }, {
-                        onConflict: 'property_id, source_type, external_uid'
+                        onConflict: 'property_id, check_in, check_out'
                     });
 
                 if (bookingError) console.error(`[ICalProcessor] Failed to upsert ${uid}:`, bookingError);

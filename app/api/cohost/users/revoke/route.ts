@@ -37,6 +37,15 @@ export async function POST(request: NextRequest) {
   }
 
   if (type === 'invite') {
+    // First, get the invite to check if it was accepted (need to deactivate member too)
+    const { data: invite } = await service
+      .from('cohost_workspace_invites')
+      .select('status, accepted_by')
+      .eq('id', id)
+      .eq('workspace_id', workspaceId)
+      .single();
+
+    // Revoke the invite
     await service
       .from('cohost_workspace_invites')
       .update({
@@ -45,6 +54,26 @@ export async function POST(request: NextRequest) {
       })
       .eq('id', id)
       .eq('workspace_id', workspaceId);
+
+    // If invite was accepted, also deactivate the member and clean up their preference
+    if (invite?.status === 'accepted' && invite?.accepted_by) {
+      await service
+        .from('cohost_workspace_members')
+        .update({
+          is_active: false,
+          deactivated_at: new Date().toISOString(),
+          deactivated_by: user.id,
+        })
+        .eq('workspace_id', workspaceId)
+        .eq('user_id', invite.accepted_by);
+
+      // Remove their workspace preference so they can't access this workspace
+      await service
+        .from('cohost_user_preferences')
+        .delete()
+        .eq('user_id', invite.accepted_by)
+        .eq('workspace_id', workspaceId);
+    }
   }
 
   return NextResponse.json({ success: true });

@@ -1,10 +1,24 @@
 import { NextResponse } from 'next/server';
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
 import { getCurrentUserWithWorkspace } from '@/lib/supabase/authServer';
+import { createClient } from '@/lib/supabase/server';
 
 export async function GET() {
   const { user, workspaceId } = await getCurrentUserWithWorkspace();
   if (!user || !workspaceId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  // Role guard: only owner/admin can list team members
+  const supabase = await createClient();
+  const { data: member } = await supabase
+    .from('cohost_workspace_members')
+    .select('role, is_active')
+    .eq('workspace_id', workspaceId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (!member?.is_active || !['owner', 'admin'].includes(member.role)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const service = createCohostServiceClient();
   const { data: members } = await service
@@ -21,9 +35,9 @@ export async function GET() {
 
   const { data: invites } = await service
     .from('cohost_workspace_invites')
-    .select('id, invitee_email, invitee_name, role_label, status, created_at, expires_at, can_view_calendar, can_view_guest_name, can_view_guest_count, can_view_booking_notes, can_view_contact_info')
+    .select('id, invitee_email, invitee_name, role_label, role, status, created_at, expires_at, invite_url, can_view_calendar, can_view_guest_name, can_view_guest_count, can_view_booking_notes, can_view_contact_info')
     .eq('workspace_id', workspaceId)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'accepted'])
     .order('created_at', { ascending: false });
 
   return NextResponse.json({ members: membersWithEmail, invites: invites || [] });

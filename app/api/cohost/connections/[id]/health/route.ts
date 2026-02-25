@@ -117,6 +117,7 @@ export async function GET(
         const { count: enriched7d } = await supabase
             .from('bookings')
             .select('id', { count: 'exact', head: true })
+            .eq('is_active', true)
             .not('guest_first_name', 'is', null) // Only count if we parsed a name
             .gte('updated_at', sevenDaysAgo)
             // Filter by properties linked to this connection
@@ -139,6 +140,7 @@ export async function GET(
             const { count: e24 } = await supabase
                 .from('bookings')
                 .select('*', { count: 'exact', head: true })
+                .eq('is_active', true)
                 .in('property_id', propIds)
                 .not('guest_first_name', 'is', null)
                 .gte('updated_at', oneDayAgo);
@@ -146,6 +148,7 @@ export async function GET(
             const { count: e7 } = await supabase
                 .from('bookings')
                 .select('*', { count: 'exact', head: true })
+                .eq('is_active', true)
                 .in('property_id', propIds)
                 .not('guest_first_name', 'is', null)
                 .gte('updated_at', sevenDaysAgo);
