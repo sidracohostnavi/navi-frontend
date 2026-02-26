@@ -38,20 +38,28 @@ export async function GET(request: Request) {
         // 2. Fetch all active iCal feeds
         const { data: feeds, error: feedsError } = await supabase
             .from('ical_feeds')
-            .select('id, property_id, source_name, source_type, ical_url, name, properties(workspace_id)')
+            .select('id, property_id, source_name, source_type, ical_url, name')
             .eq('is_active', true);
 
         if (feedsError || !feeds) {
             throw new Error(`Failed to fetch iCal feeds: ${feedsError?.message}`);
         }
 
+        // 2b. Map property_ids to workspace_ids
+        const propertyIds = Array.from(new Set(feeds.map(f => f.property_id)));
+        const { data: properties } = await supabase
+            .from('cohost_properties')
+            .select('id, workspace_id')
+            .in('id', propertyIds);
+
+        const workspaceMap = new Map((properties || []).map(p => [p.id, p.workspace_id]));
+
         let totalProcessedCount = 0;
         const affectedWorkspaceIds = new Set<string>();
 
         // 3. Process iCal Feeds sequentially
         for (const feed of feeds) {
-            // @ts-ignore - properties join is a single object here, assuming standard schema relation
-            const workspaceId = Array.isArray(feed.properties) ? feed.properties[0]?.workspace_id : feed.properties?.workspace_id;
+            const workspaceId = workspaceMap.get(feed.property_id);
 
             if (!workspaceId) continue;
 
