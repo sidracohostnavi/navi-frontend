@@ -92,15 +92,29 @@ export class ICalProcessor {
                 console.warn('[ICalProcessor] Failed to load reservation facts:', e);
             }
 
-            // 2. Fetch iCal Feed
+            // 2. Fetch iCal Feed with 10s Timeout
             const ical = require('node-ical');
-            const response = await fetch(feed.ical_url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/calendar, text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8'
-                },
-                redirect: 'follow'
-            });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s hard limit
+
+            let response;
+            try {
+                response = await fetch(feed.ical_url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/calendar, text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8'
+                    },
+                    redirect: 'follow',
+                    signal: controller.signal
+                });
+            } catch (err: any) {
+                if (err.name === 'AbortError') {
+                    throw new Error(`fetch timeout: feed url exceeded 10s limit`);
+                }
+                throw err;
+            } finally {
+                clearTimeout(timeoutId);
+            }
 
             httpStatus = response.status;
             contentType = response.headers.get('content-type') || '';

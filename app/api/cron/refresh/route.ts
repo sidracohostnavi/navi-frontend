@@ -6,7 +6,7 @@ import { DBLock } from '@/lib/utils/db-lock';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // Allow 5 minutes for cron
+export const maxDuration = 60; // Allow 1 minute for cron
 
 export async function GET(request: Request) {
     const authHeader = request.headers.get('authorization');
@@ -41,20 +41,24 @@ export async function GET(request: Request) {
 
         console.log(`[TEMP] NEXT_PUBLIC_SUPABASE_URL: ${process.env.NEXT_PUBLIC_SUPABASE_URL}`);
 
-        // 2. Fetch all active iCal feeds
-        const { data: feeds, error: feedsError } = await supabase
+        // 2. Fetch all active iCal feeds, ordered by last_synced_at ascending (nulls first)
+        const { data: allFeeds, error: feedsError } = await supabase
             .from('ical_feeds')
-            .select('id, property_id, source_name, source_type, ical_url, name')
-            .eq('is_active', true);
+            .select('id, property_id, source_name, source_type, ical_url, name, last_synced_at')
+            .eq('is_active', true)
+            .order('last_synced_at', { ascending: true, nullsFirst: true });
 
-        if (feedsError || !feeds) {
+        if (feedsError || !allFeeds) {
             throw new Error(`Failed to fetch iCal feeds: ${feedsError?.message}`);
         }
 
-        console.log(`[TEMP] active_feeds_count=${feeds.length}`);
-        if (feeds.length > 0) {
-            console.log(`[TEMP] First 3 feeds: ${JSON.stringify(feeds.slice(0, 3).map(f => ({ id: f.id, property_id: f.property_id })))}`);
-        }
+        const BATCH_SIZE = 1;
+        const feeds = allFeeds.slice(0, BATCH_SIZE);
+        const selectedFeedIds = feeds.map(f => f.id);
+
+        console.log(`CRON_REFRESH_HIT ${new Date().toISOString()}`);
+        console.log(`ACTIVE_FEEDS_TOTAL ${allFeeds.length}`);
+        console.log(`FEEDS_SELECTED ${JSON.stringify(selectedFeedIds)}`);
 
         // 2b. Map property_ids to workspace_ids
         const propertyIds = Array.from(new Set(feeds.map(f => f.property_id)));
@@ -77,7 +81,7 @@ export async function GET(request: Request) {
                 continue;
             }
 
-            console.log(`[TEMP] syncFeed_start feed_id=${feed.id} workspace_id=${workspaceId}`);
+            console.log(`SYNC_START ${feed.id}`);
             try {
                 const result = await ICalProcessor.syncFeed({
                     id: feed.id,
@@ -88,21 +92,27 @@ export async function GET(request: Request) {
                     name: feed.name || ''
                 }, workspaceId, supabase);
 
-                console.log(`[TEMP] syncFeed_end feed_id=${feed.id} processed_count=${result.processed_count}`);
+                console.log(`SYNC_END ${feed.id} ${result.processed_count}`);
 
                 if (result.processed_count > 0) {
                     totalProcessedCount += result.processed_count;
                     affectedWorkspaceIds.add(workspaceId);
                 }
             } catch (err: any) {
-                console.error(`[TEMP] syncFeed_error feed_id=${feed.id}: ${err.message}`);
-            }
+                console.error(`syncFeed_error feed_id=${feed.id}: ${err.message}`);
+            } // no-op
         }
 
         // 4. Gate Gmail ingestion based on iCal changes
         if (totalProcessedCount === 0) {
             console.log(JSON.stringify({ event: "cron_refresh_end", status: "no_changes", duration_ms: Date.now() - start }));
-            return NextResponse.json({ status: "no_changes", gmail_triggered: false });
+            return NextResponse.json({
+                status: "no_changes",
+                feeds_total: allFeeds.length,
+                feeds_processed: feeds.length,
+                feed_ids_processed: selectedFeedIds,
+                gmail_triggered: false
+            });
         }
 
         // 5. Gmail Ingestion + Enrichment for affected workspaces
@@ -163,6 +173,9 @@ export async function GET(request: Request) {
         const endEvent = {
             event: "cron_refresh_end",
             status: runStatus,
+            feeds_total: allFeeds.length,
+            feeds_processed: feeds.length,
+            feed_ids_processed: selectedFeedIds,
             total_processed_count: totalProcessedCount,
             gmail_triggered: true,
             connections_synced: connectionsSynced,

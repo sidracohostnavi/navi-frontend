@@ -61,3 +61,4 @@ gmail_token.json
 supabase_key.json
 !scripts/migrations/*token*
 !packages/*token*
+.env*.local
