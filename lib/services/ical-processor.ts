@@ -48,8 +48,8 @@ export class ICalProcessor {
     /**
      * Syncs a single iCal feed: fetches, parses, matches facts, and upserts bookings.
      */
-    static async syncFeed(feed: ICalFeed, workspaceId: string): Promise<SyncResult> {
-        const supabase = await createClient(); // Use server client
+    static async syncFeed(feed: ICalFeed, workspaceId: string, supabaseClient?: SupabaseClient): Promise<SyncResult> {
+        const supabase = supabaseClient || await createClient(); // Use provided client or fallback to server client
         console.log(`[ICalProcessor] Processing feed ${feed.id} for property ${feed.property_id}`);
 
         let httpStatus = 0;

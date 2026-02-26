@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createClient } from '@supabase/supabase-js';
 import { ICalProcessor } from '@/lib/services/ical-processor';
 import { EmailProcessor } from '@/lib/services/email-processor';
 import { DBLock } from '@/lib/utils/db-lock';
@@ -33,7 +33,13 @@ export async function GET(request: Request) {
     console.log(JSON.stringify({ event: "cron_refresh_start", timestamp: new Date().toISOString() }));
 
     try {
-        const supabase = await createClient();
+        // Use service role to bypass RLS for logging
+        const supabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
+
+        console.log(`[TEMP] NEXT_PUBLIC_SUPABASE_URL: ${process.env.NEXT_PUBLIC_SUPABASE_URL}`);
 
         // 2. Fetch all active iCal feeds
         const { data: feeds, error: feedsError } = await supabase
@@ -43,6 +49,11 @@ export async function GET(request: Request) {
 
         if (feedsError || !feeds) {
             throw new Error(`Failed to fetch iCal feeds: ${feedsError?.message}`);
+        }
+
+        console.log(`[TEMP] active_feeds_count=${feeds.length}`);
+        if (feeds.length > 0) {
+            console.log(`[TEMP] First 3 feeds: ${JSON.stringify(feeds.slice(0, 3).map(f => ({ id: f.id, property_id: f.property_id })))}`);
         }
 
         // 2b. Map property_ids to workspace_ids
@@ -61,20 +72,30 @@ export async function GET(request: Request) {
         for (const feed of feeds) {
             const workspaceId = workspaceMap.get(feed.property_id);
 
-            if (!workspaceId) continue;
+            if (!workspaceId) {
+                console.log(`[TEMP] Skipping feed ${feed.id} because workspaceId is missing`);
+                continue;
+            }
 
-            const result = await ICalProcessor.syncFeed({
-                id: feed.id,
-                property_id: feed.property_id,
-                source_name: feed.source_name,
-                source_type: feed.source_type,
-                ical_url: feed.ical_url,
-                name: feed.name || ''
-            }, workspaceId);
+            console.log(`[TEMP] syncFeed_start feed_id=${feed.id} workspace_id=${workspaceId}`);
+            try {
+                const result = await ICalProcessor.syncFeed({
+                    id: feed.id,
+                    property_id: feed.property_id,
+                    source_name: feed.source_name,
+                    source_type: feed.source_type,
+                    ical_url: feed.ical_url,
+                    name: feed.name || ''
+                }, workspaceId, supabase);
 
-            if (result.processed_count > 0) {
-                totalProcessedCount += result.processed_count;
-                affectedWorkspaceIds.add(workspaceId);
+                console.log(`[TEMP] syncFeed_end feed_id=${feed.id} processed_count=${result.processed_count}`);
+
+                if (result.processed_count > 0) {
+                    totalProcessedCount += result.processed_count;
+                    affectedWorkspaceIds.add(workspaceId);
+                }
+            } catch (err: any) {
+                console.error(`[TEMP] syncFeed_error feed_id=${feed.id}: ${err.message}`);
             }
         }
 
