@@ -16,12 +16,16 @@ export class DBLock {
     private key: number;
 
     constructor() {
-        if (!process.env.DATABASE_URL) {
-            throw new Error('DATABASE_URL is required for DBLock');
+        const dbUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+        if (!dbUrl) {
+            throw new Error('DATABASE_URL or SUPABASE_DB_URL is required for DBLock');
         }
         // Vercel serverless uses neon/supabase connection strings. 
         // We might need to ensure ssl is used if in prod, but pg will usually handle the direct string if it has sslmeode=require.
-        this.client = new Client({ connectionString: process.env.DATABASE_URL });
+        this.client = new Client({
+            connectionString: dbUrl,
+            ssl: { rejectUnauthorized: false }
+        });
         // Use a consistent, application-specific integer key for the cron job lock.
         // E.g., hash of "navi-ical-cron-lock"
         this.key = 28419374;
