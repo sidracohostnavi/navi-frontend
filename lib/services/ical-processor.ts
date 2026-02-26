@@ -279,7 +279,8 @@ export class ICalProcessor {
             }
 
             // Log to ical_sync_log
-            await supabase.from('ical_sync_log').insert({
+            const { error: logError } = await supabase.from('ical_sync_log').insert({
+                workspace_id: workspaceId,
                 property_id: feed.property_id,
                 channel: 'ical',
                 synced_at: new Date().toISOString(),
@@ -290,6 +291,10 @@ export class ICalProcessor {
                 success: true,
                 error_message: null
             });
+
+            if (logError) {
+                console.error('[ICalProcessor] Failed to insert ical_sync_log:', logError);
+            }
 
             return {
                 feed_id: feed.id,
@@ -316,7 +321,8 @@ export class ICalProcessor {
             }).eq('id', feed.id);
 
             // Log to ical_sync_log (failure)
-            await supabase.from('ical_sync_log').insert({
+            const { error: logError } = await supabase.from('ical_sync_log').insert({
+                workspace_id: workspaceId,
                 property_id: feed.property_id,
                 channel: 'ical',
                 synced_at: new Date().toISOString(),
@@ -327,6 +333,10 @@ export class ICalProcessor {
                 success: false,
                 error_message: syncError
             });
+
+            if (logError) {
+                console.error('[ICalProcessor] Failed to insert ical_sync_log:', logError);
+            }
 
             return {
                 feed_id: feed.id,
