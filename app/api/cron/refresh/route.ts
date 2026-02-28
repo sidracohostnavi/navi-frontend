@@ -81,6 +81,10 @@ export async function GET(request: Request) {
                 continue;
             }
 
+            // Populate affectedWorkspaceIds from ALL batch workspaces, not just those with changes.
+            // This ensures Gmail enrichment runs for unenriched bookings from prior syncs.
+            affectedWorkspaceIds.add(workspaceId);
+
             console.log(`SYNC_START ${feed.id}`);
             try {
                 const result = await ICalProcessor.syncFeed({
@@ -96,24 +100,13 @@ export async function GET(request: Request) {
 
                 if (result.processed_count > 0) {
                     totalProcessedCount += result.processed_count;
-                    affectedWorkspaceIds.add(workspaceId);
                 }
             } catch (err: any) {
                 console.error(`syncFeed_error feed_id=${feed.id}: ${err.message}`);
             } // no-op
         }
 
-        // 4. Gate Gmail ingestion based on iCal changes
-        if (totalProcessedCount === 0) {
-            console.log(JSON.stringify({ event: "cron_refresh_end", status: "no_changes", duration_ms: Date.now() - start }));
-            return NextResponse.json({
-                status: "no_changes",
-                feeds_total: allFeeds.length,
-                feeds_processed: feeds.length,
-                feed_ids_processed: selectedFeedIds,
-                gmail_triggered: false
-            });
-        }
+        // 4. Gmail runs on every cron for all batch workspaces — not gated on iCal changes.
 
         // 5. Gmail Ingestion + Enrichment for affected workspaces
         const connectionsSynced: string[] = [];
@@ -153,17 +146,20 @@ export async function GET(request: Request) {
                     gmailFailedConnections.push(connection.id);
                 }
 
-                // Log to new gmail_sync_log table
-                await supabase.from('gmail_sync_log').insert({
-                    workspace_id: workspaceId,
-                    connection_id: connection.id,
-                    success,
-                    error_message: errorMessage,
-                    emails_scanned: scanCount,
-                    bookings_enriched: enrichCount,
-                    review_items_created: missingCount,
-                    duration_ms: Date.now() - connStart
-                });
+                // Log to gmail_sync_log only when there is something to report.
+                // Silent successful runs with no enrichments or missing bookings produce no record.
+                if (enrichCount > 0 || missingCount > 0 || success === false) {
+                    await supabase.from('gmail_sync_log').insert({
+                        workspace_id: workspaceId,
+                        connection_id: connection.id,
+                        success,
+                        error_message: errorMessage,
+                        emails_scanned: scanCount,
+                        bookings_enriched: enrichCount,
+                        review_items_created: missingCount,
+                        duration_ms: Date.now() - connStart
+                    });
+                }
             }
         }
 
