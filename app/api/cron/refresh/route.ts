@@ -81,10 +81,6 @@ export async function GET(request: Request) {
                 continue;
             }
 
-            // Populate affectedWorkspaceIds from ALL batch workspaces, not just those with changes.
-            // This ensures Gmail enrichment runs for unenriched bookings from prior syncs.
-            affectedWorkspaceIds.add(workspaceId);
-
             console.log(`SYNC_START ${feed.id}`);
             try {
                 const result = await ICalProcessor.syncFeed({
@@ -100,13 +96,24 @@ export async function GET(request: Request) {
 
                 if (result.processed_count > 0) {
                     totalProcessedCount += result.processed_count;
+                    affectedWorkspaceIds.add(workspaceId);
                 }
             } catch (err: any) {
                 console.error(`syncFeed_error feed_id=${feed.id}: ${err.message}`);
             } // no-op
         }
 
-        // 4. Gmail runs on every cron for all batch workspaces — not gated on iCal changes.
+        // 4. Gate Gmail ingestion based on iCal changes
+        if (totalProcessedCount === 0) {
+            console.log(JSON.stringify({ event: "cron_refresh_end", status: "no_changes", duration_ms: Date.now() - start }));
+            return NextResponse.json({
+                status: "no_changes",
+                feeds_total: allFeeds.length,
+                feeds_processed: feeds.length,
+                feed_ids_processed: selectedFeedIds,
+                gmail_triggered: false
+            });
+        }
 
         // 5. Gmail Ingestion + Enrichment for affected workspaces
         const connectionsSynced: string[] = [];
