@@ -481,7 +481,13 @@ export class EmailProcessor {
         if (!name) return true;
         const lower = name.toLowerCase();
         // Common placeholders
-        if (lower === 'guest' || lower === 'reserved' || lower === 'blocked' || lower === 'not available') return true;
+        if (lower === 'guest' || lower === 'reserved' || lower === 'blocked' || lower === 'not available' || lower === 'closed period') return true;
+
+        // Platform placeholders (e.g. "Airbnb (via Lodgify)", "VRBO Guest", "Booking.com")
+        if (/(airbnb|vrbo|lodgify|booking\.com|via |expedia)/i.test(name)) return true;
+
+        // Check for alphanumeric reservation IDs used as names
+        if (/^[A-Z0-9_-]{6,20}$/.test(name) && /\d/.test(name)) return true;
 
         // Check for masked patterns (e.g. "M***** P*****" or just "*****")
         // Heuristic: If name has 5 or more asterisks, it's likely masked.
@@ -576,21 +582,20 @@ export class EmailProcessor {
                     return bIn === factIn && bOut === factOut;
                 });
 
-                if (dateMatches.length === 1) {
-                    targetBooking = dateMatches[0];
-                    matchReason = 'Unique Date';
-                } else if (dateMatches.length > 1) {
-                    // Check Property Ambiguity
-                    const distinctProps = new Set(dateMatches.map((b: any) => b.property_id));
-                    if (distinctProps.size > 1) {
-                        console.warn(`[EmailProcessor] ❌ Ambiguity Block: Fact ${fact.id} matches multiple properties: ${Array.from(distinctProps).join(', ')}`);
-                        // Cannot assign safely
-                        continue;
-                    }
-                    // Same property collision? Pick first or skip?
-                    // Safe to pick first if same property (likely cleaning block vs booking or duplicate feed)
-                    targetBooking = dateMatches[0];
-                    matchReason = 'Date (Single Prop)';
+                const eligible_unenriched_matches = dateMatches.filter((b: any) =>
+                    EmailProcessor.isMaskedGuestName(b.guest_name)
+                );
+
+                if (eligible_unenriched_matches.length === 1) {
+                    targetBooking = eligible_unenriched_matches[0];
+                    matchReason = 'Unique Date (Eligible)';
+                } else if (eligible_unenriched_matches.length > 1) {
+                    // AMBIGUITY: Multiple unenriched bookings need this fact
+                    targetBooking = null;
+                    matchReason = 'AMBIGUITY_TRIPPED';
+                } else if (eligible_unenriched_matches.length === 0) {
+                    // No eligible targets (all enriched, or none existed)
+                    targetBooking = null;
                 }
             }
 
@@ -679,16 +684,38 @@ export class EmailProcessor {
                         .from('enrichment_review_items')
                         .select('id')
                         .eq('connection_id', connectionId)
-                        .contains('extracted_data', { confirmation_code: fact.confirmation_code })
-                        .single();
+                        .eq('extracted_data->>confirmation_code', fact.confirmation_code)
+                        .maybeSingle();
 
                     if (!existingReview && workspaceId) {
                         console.warn(`[EmailProcessor] ⚠️ Booking Missing from Calendar: ${fact.guest_name} (${fact.check_in}) code=${fact.confirmation_code}`);
 
+                        let payloadData: any = { ...fact };
+
+                        // Inject ambiguity context if tripped
+                        if (matchReason === 'AMBIGUITY_TRIPPED') {
+                            const dateMatches = candidateBookings.filter((b: any) => {
+                                const bIn = new Date(b.check_in).toISOString().split('T')[0];
+                                const bOut = new Date(b.check_out).toISOString().split('T')[0];
+                                return bIn === fact.check_in && bOut === fact.check_out;
+                            });
+
+                            const eligible_unenriched_matches = dateMatches.filter((b: any) =>
+                                EmailProcessor.isMaskedGuestName(b.guest_name)
+                            );
+
+                            payloadData = {
+                                ...fact,
+                                candidate_booking_ids: eligible_unenriched_matches.map((b: any) => b.id),
+                                candidate_property_ids: eligible_unenriched_matches.map((b: any) => b.property_id),
+                                reason: 'AMBIGUITY_DATE_MATCH_MULTIPLE_UNENRICHED'
+                            };
+                        }
+
                         await supabase.from('enrichment_review_items').insert({
                             workspace_id: workspaceId,
                             connection_id: connectionId,
-                            extracted_data: fact,
+                            extracted_data: payloadData,
                             status: 'pending'
                         });
                         missingCount++;
@@ -1127,6 +1154,20 @@ export class EmailProcessor {
             } else {
                 const codeMatch = body.match(/(?:Confirmation code|Reservation ID).*?([A-Z0-9]{8,15})/i);
                 if (codeMatch) confirmation_code = codeMatch[1];
+            }
+
+            // =====================================================================
+            // 5b. AIRBNB CHECKOUT OFFSET
+            // Airbnb confirmation emails report the actual guest checkout date (e.g. Feb 28).
+            // Airbnb iCal feeds report checkout as one day later (e.g. Mar 01).
+            // To align fact.check_out with the iCal booking date for enrichment matching,
+            // add one day when the confirmation_code starts with 'HM' (Airbnb's code pattern).
+            // Lodgify codes start with 'B\d' — this block does NOT apply to them.
+            // =====================================================================
+            if (confirmation_code && /^HM/i.test(confirmation_code) && check_out) {
+                const d = new Date(check_out);
+                d.setDate(d.getDate() + 1);
+                check_out = d.toISOString().split('T')[0];
             }
 
             // Listing Name

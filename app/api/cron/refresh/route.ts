@@ -153,17 +153,20 @@ export async function GET(request: Request) {
                     gmailFailedConnections.push(connection.id);
                 }
 
-                // Log to new gmail_sync_log table
-                await supabase.from('gmail_sync_log').insert({
-                    workspace_id: workspaceId,
-                    connection_id: connection.id,
-                    success,
-                    error_message: errorMessage,
-                    emails_scanned: scanCount,
-                    bookings_enriched: enrichCount,
-                    review_items_created: missingCount,
-                    duration_ms: Date.now() - connStart
-                });
+                // Log to gmail_sync_log only when there is something to report.
+                // Silent successful runs with no enrichments or missing bookings produce no record.
+                if (enrichCount > 0 || missingCount > 0 || success === false) {
+                    await supabase.from('gmail_sync_log').insert({
+                        workspace_id: workspaceId,
+                        connection_id: connection.id,
+                        success,
+                        error_message: errorMessage,
+                        emails_scanned: scanCount,
+                        bookings_enriched: enrichCount,
+                        review_items_created: missingCount,
+                        duration_ms: Date.now() - connStart
+                    });
+                }
             }
         }
 
