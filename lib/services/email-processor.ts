@@ -684,8 +684,8 @@ export class EmailProcessor {
                         .from('enrichment_review_items')
                         .select('id')
                         .eq('connection_id', connectionId)
-                        .contains('extracted_data', { confirmation_code: fact.confirmation_code })
-                        .single();
+                        .eq('extracted_data->>confirmation_code', fact.confirmation_code)
+                        .maybeSingle();
 
                     if (!existingReview && workspaceId) {
                         console.warn(`[EmailProcessor] ⚠️ Booking Missing from Calendar: ${fact.guest_name} (${fact.check_in}) code=${fact.confirmation_code}`);
