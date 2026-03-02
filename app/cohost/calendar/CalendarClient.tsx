@@ -1097,7 +1097,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                               top: '50%',
                               transform: 'translate(-50%, -50%)',
                               zIndex: 20,
-                              fontSize: '34px',
+                              fontSize: isMobile ? '27px' : '34px',
                               lineHeight: 1,
                             }}
                             title="Checkout cleaning"
