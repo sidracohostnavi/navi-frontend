@@ -338,6 +338,8 @@ export async function POST(request: Request, context: RouteContext) {
                 raw_data: {
                     ...targetBooking.raw_data,
                     from_fact_id: newFact.id,
+                    enriched_from_fact: true,
+                    enriched_manually: true,
                     enriched_from_review: reviewItemId,
                     enrichment_reason: 'review_assignment',
                     connection_label_name: connectionLabelName,
