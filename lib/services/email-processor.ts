@@ -1156,19 +1156,9 @@ export class EmailProcessor {
                 if (codeMatch) confirmation_code = codeMatch[1];
             }
 
-            // =====================================================================
-            // 5b. AIRBNB CHECKOUT OFFSET
-            // Airbnb confirmation emails report the actual guest checkout date (e.g. Feb 28).
-            // Airbnb iCal feeds report checkout as one day later (e.g. Mar 01).
-            // To align fact.check_out with the iCal booking date for enrichment matching,
-            // add one day when the confirmation_code starts with 'HM' (Airbnb's code pattern).
-            // Lodgify codes start with 'B\d' — this block does NOT apply to them.
-            // =====================================================================
-            if (confirmation_code && /^HM/i.test(confirmation_code) && check_out) {
-                const d = new Date(check_out);
-                d.setDate(d.getDate() + 1);
-                check_out = d.toISOString().split('T')[0];
-            }
+            // NOTE: Airbnb checkout offset (+1 day) was previously applied here
+            // but removed after investigation showed Airbnb email checkout dates
+            // already match iCal DTEND dates. The +1 caused a mismatch.
 
             // Listing Name
             let listing_name = 'Short-term Rental';

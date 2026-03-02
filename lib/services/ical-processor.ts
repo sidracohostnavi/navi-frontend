@@ -262,7 +262,7 @@ export class ICalProcessor {
 
                     const { data: existing, error: searchError } = await supabase
                         .from('bookings')
-                        .select('id, check_in, check_out, guest_name, guest_count, status, is_active, platform, external_uid')
+                        .select('id, check_in, check_out, guest_name, guest_count, status, is_active, platform, external_uid, raw_data')
                         .eq('workspace_id', workspaceId)
                         .eq('property_id', feed.property_id)
                         .eq('is_active', true)
@@ -297,7 +297,22 @@ export class ICalProcessor {
                     guest_last_initial: guestLastInitial,
                     status: 'confirmed',
                     platform: platform,
-                    raw_data: { ...sanitizedRawData, enriched_from_fact: enriched, ...(enriched && factMatches[0] ? { from_fact_id: (factMatches[0] as any).id } : {}) },
+                    raw_data: {
+                        ...sanitizedRawData,
+                        enriched_from_fact: enriched,
+                        ...(enriched && factMatches[0] ? { from_fact_id: (factMatches[0] as any).id } : {}),
+                        // Preserve enrichment fields that iCal should never overwrite
+                        ...(targetBooking?.raw_data?.from_fact_id && !(enriched && factMatches[0])
+                            ? { from_fact_id: targetBooking.raw_data.from_fact_id } : {}),
+                        ...(targetBooking?.raw_data?.enriched_from_review
+                            ? { enriched_from_review: targetBooking.raw_data.enriched_from_review } : {}),
+                        ...(targetBooking?.raw_data?.connection_label_name
+                            ? { connection_label_name: targetBooking.raw_data.connection_label_name } : {}),
+                        ...(targetBooking?.raw_data?.connection_label_color
+                            ? { connection_label_color: targetBooking.raw_data.connection_label_color } : {}),
+                        ...(targetBooking?.raw_data?.enriched_manually
+                            ? { enriched_manually: targetBooking.raw_data.enriched_manually } : {}),
+                    },
                     last_synced_at: new Date().toISOString(),
                     source_feed_id: feed.id,
                     is_active: true
