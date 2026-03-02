@@ -283,6 +283,20 @@ export class ICalProcessor {
                     console.error('[ICalProcessor] Failed to query existing booking:', e);
                 }
 
+                // If the existing booking was manually enriched, always preserve the stored guest name
+                // and lock enriched_from_fact as true — iCal sync must never overwrite manual assignments
+                if (targetBooking?.raw_data?.enriched_manually) {
+                    if (targetBooking.guest_name && !isMaskedName(targetBooking.guest_name)) {
+                        guestName = targetBooking.guest_name;
+                        guestFirst = targetBooking.guest_first_name || guestFirst;
+                        guestLastInitial = targetBooking.guest_last_initial || guestLastInitial;
+                        console.log(`[ICalProcessor] Manually enriched booking — preserved guest name "${guestName}" for ${uid}`);
+                    }
+                    // Also ensure enriched_from_fact stays true when from_fact_id is present
+                    enriched = enriched || !!(targetBooking?.raw_data?.from_fact_id);
+                }
+
+
                 const sanitizedRawData = sanitizeForJson(event);
                 const payload = {
                     workspace_id: workspaceId,
