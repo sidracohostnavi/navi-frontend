@@ -712,10 +712,9 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         >
           {/* Header Row: Properties Title */}
           <div
-            className="sticky top-0 left-0 z-50 bg-white border-b border-r border-gray-200 flex items-center px-4 font-semibold text-gray-500 text-xs uppercase tracking-wider shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)]"
+            className="sticky top-0 left-0 z-50 bg-white border-b border-r border-gray-200 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)]"
             style={{ gridColumn: '1', gridRow: '1', height: HEADER_HEIGHT }}
           >
-            Properties
           </div>
 
           {/* Header Row: Dates */}
