@@ -297,7 +297,7 @@ export class ICalProcessor {
                     guest_last_initial: guestLastInitial,
                     status: 'confirmed',
                     platform: platform,
-                    raw_data: { ...sanitizedRawData, enriched_from_fact: enriched },
+                    raw_data: { ...sanitizedRawData, enriched_from_fact: enriched, ...(enriched && factMatches[0] ? { from_fact_id: (factMatches[0] as any).id } : {}) },
                     last_synced_at: new Date().toISOString(),
                     source_feed_id: feed.id,
                     is_active: true
