@@ -60,12 +60,17 @@ type Booking = {
 
 // --- Constants ---
 // Responsive layout: tighter on mobile for scannability
-const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth < 768;
-const CELL_WIDTH = IS_MOBILE ? 64 : 140;
-const ROW_HEIGHT = IS_MOBILE ? 56 : 80;
-const HEADER_HEIGHT = IS_MOBILE ? 48 : 60;
-const MIN_SIDEBAR_WIDTH = IS_MOBILE ? 52 : 180;
-const MAX_SIDEBAR_WIDTH = IS_MOBILE ? 52 : 420;
+// isMobile is now evaluated dynamically on the client via state
+const CELL_WIDTH_MOBILE = 64;
+const CELL_WIDTH_DESKTOP = 140;
+const ROW_HEIGHT_MOBILE = 56;
+const ROW_HEIGHT_DESKTOP = 80;
+const HEADER_HEIGHT_MOBILE = 48;
+const HEADER_HEIGHT_DESKTOP = 60;
+const MIN_SIDEBAR_WIDTH_MOBILE = 52;
+const MIN_SIDEBAR_WIDTH_DESKTOP = 180;
+const MAX_SIDEBAR_WIDTH_MOBILE = 52;
+const MAX_SIDEBAR_WIDTH_DESKTOP = 420;
 
 const TODAY = new Date();
 // Range Limits: -12 Months to +24 Months
@@ -154,8 +159,16 @@ const getGridPosition = (item: { startDate: string; endDate: string }, windowSta
 const DEFAULT_BOOKING_COLOR = '#e5e7eb'; // gray-200
 
 export default function CalendarClient({ apiBase }: { apiBase: string }) {
+  const [isMobile, setIsMobile] = useState(false);
   const [permissions, setPermissions] = useState<FeaturePermissions | null>(null);
   const [userRole, setUserRole] = useState<string>('');
+
+  // Dynamically resolve layout constants based on client state
+  const CELL_WIDTH = isMobile ? CELL_WIDTH_MOBILE : CELL_WIDTH_DESKTOP;
+  const ROW_HEIGHT = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT_DESKTOP;
+  const HEADER_HEIGHT = isMobile ? HEADER_HEIGHT_MOBILE : HEADER_HEIGHT_DESKTOP;
+  const MIN_SIDEBAR_WIDTH = isMobile ? MIN_SIDEBAR_WIDTH_MOBILE : MIN_SIDEBAR_WIDTH_DESKTOP;
+  const MAX_SIDEBAR_WIDTH = isMobile ? MAX_SIDEBAR_WIDTH_MOBILE : MAX_SIDEBAR_WIDTH_DESKTOP;
 
   useEffect(() => {
     async function fetchRole() {
@@ -176,7 +189,11 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Layout State
-  const [sidebarWidth, setSidebarWidth] = useState(IS_MOBILE ? 52 : 260);
+  const [sidebarWidth, setSidebarWidth] = useState(260); // Default to desktop, effect changes it
+
+  useEffect(() => {
+    setSidebarWidth(isMobile ? 52 : 260);
+  }, [isMobile]);
   const [isResizing, setIsResizing] = useState(false);
 
   // Infinite Scroll & Navigation State
@@ -186,8 +203,12 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [minDate, setMinDate] = useState<Date | null>(null); // Earliest allowed scroll
   const [visibleMonthDate, setVisibleMonthDate] = useState<Date | null>(null);
 
-  // Hydrate dates on client-side only to prevent mismatch
+  // Hydrate dates and screen size on client-side only to prevent mismatch
   useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+
     const now = normalizeToLocalMidnight(new Date());
     setRangeStart(now);
     setVisibleMonthDate(now);
@@ -197,6 +218,8 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     min.setMonth(now.getMonth() - 12);
     min.setDate(1);
     setMinDate(min);
+
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   // Data State
@@ -752,17 +775,17 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                   className={`sticky left-0 z-50 bg-white border-r border-gray-200 p-4 flex flex-col justify-center shadow-[4px_0_12px_-4px_rgba(0,0,0,0.05)] ${rowClass}`}
                   style={{ gridColumn: '1', gridRow: gridRow, height: ROW_HEIGHT }}
                 >
-                  <div className={`flex items-center ${IS_MOBILE ? 'justify-center' : 'gap-3'}`}>
+                  <div className={`flex items-center ${isMobile ? 'justify-center' : 'gap-3'}`}>
                     {property.image ? (
-                      <div className={`${IS_MOBILE ? 'w-9 h-9' : 'w-8 h-8'} rounded-full overflow-hidden border border-gray-200 flex-shrink-0`}>
+                      <div className={`${isMobile ? 'w-9 h-9' : 'w-8 h-8'} rounded-full overflow-hidden border border-gray-200 flex-shrink-0`}>
                         <img src={property.image} alt={property.name} className="w-full h-full object-cover" />
                       </div>
                     ) : (
-                      <div className={`${IS_MOBILE ? 'w-9 h-9' : 'w-8 h-8'} bg-blue-100 rounded-full flex items-center justify-center text-blue-600 border border-blue-200 flex-shrink-0`}>
+                      <div className={`${isMobile ? 'w-9 h-9' : 'w-8 h-8'} bg-blue-100 rounded-full flex items-center justify-center text-blue-600 border border-blue-200 flex-shrink-0`}>
                         <span className="text-xs font-bold">{property.name.charAt(0)}</span>
                       </div>
                     )}
-                    {!IS_MOBILE && (
+                    {!isMobile && (
                       <div className="min-w-0">
                         <p className="font-medium text-gray-900 truncate text-sm">{property.name}</p>
                         <p className="text-[10px] text-gray-500 truncate">Entire home</p>
@@ -1074,7 +1097,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                               top: '50%',
                               transform: 'translate(-50%, -50%)',
                               zIndex: 20,
-                              fontSize: '28px',
+                              fontSize: '34px',
                               lineHeight: 1,
                             }}
                             title="Checkout cleaning"
