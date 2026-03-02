@@ -74,7 +74,8 @@ export async function GET(request: NextRequest) {
       'manual_guest_name',
       'manual_guest_count',
       'manual_notes',
-      'manually_resolved_at'
+      'manually_resolved_at',
+      'raw_data'
     ].join(','))
     .eq('is_active', true)
     .lt('check_in', end)
@@ -94,79 +95,57 @@ export async function GET(request: NextRequest) {
   });
 
 
-  // ─── SERVER-SIDE ENRICHMENT ──────────────────────────────────────────
-  // Merges reservation_facts into bookings BEFORE permission masking.
-  // This ensures cleaners receive enriched guest_count (for broom icon)
-  // even though guest_name will be masked afterwards.
+  // ─── SERVER-SIDE ENRICHMENT (Deterministic Link Only) ────────────────
+  // Links matched properties and guest counts using strict fact IDs.
+  // NEVER mutates guest_name or matches by date.
   if (filteredBookings.length > 0) {
-    // 1. Get connection_ids for these workspaces
-    const { data: wsConnections } = await service
-      .from('connections')
-      .select('id')
-      .in('workspace_id', allowedWorkspaces);
+    const factIdsToFetch = new Set<string>();
 
-    const connectionIds = (wsConnections || []).map((c: any) => c.id);
+    for (const booking of filteredBookings) {
+      // Collect specific fact IDs that were explicitly linked during background processing
+      const fromFactId = booking.raw_data?.from_fact_id;
+      if (fromFactId) {
+        factIdsToFetch.add(fromFactId);
+      }
+    }
 
-    if (connectionIds.length > 0) {
-      // 2. Fetch reservation_facts for those connections in the date window
+    if (factIdsToFetch.size > 0) {
       const { data: facts } = await service
         .from('reservation_facts')
-        .select('id, connection_id, check_in, check_out, guest_name, guest_count')
-        .in('connection_id', connectionIds);
+        .select('id, connection_id, guest_count')
+        .in('id', Array.from(factIdsToFetch));
 
       if (facts && facts.length > 0) {
-        // 3. Match facts → bookings by ±1 day date tolerance
-        //    Rules:
-        //    - 0 candidates: no enrichment (keep booking defaults)
-        //    - 1 candidate:  enrich guest_name + guest_count
-        //    - >1 candidates: ambiguous — do NOT enrich (no guessing)
+        const factMap = new Map();
+        for (const f of facts) {
+          factMap.set(f.id, f);
+        }
+
         for (const booking of filteredBookings) {
-          // Skip manually resolved bookings — human override takes priority
-          if (booking.manually_resolved_at) continue;
+          const fromFactId = booking.raw_data?.from_fact_id;
+          if (!fromFactId) continue;
 
-          // Convert booking timestamps to UTC date strings (YYYY-MM-DD)
-          const bookingCheckInDateString = new Date(booking.check_in).toISOString().slice(0, 10);
-          const bookingCheckOutDateString = new Date(booking.check_out).toISOString().slice(0, 10);
+          const fact = factMap.get(fromFactId);
+          if (fact) {
+            // Assign explicitly linked connection for UI colors
+            booking.matched_connection_id = fact.connection_id;
 
-          const candidates = facts.filter((f: any) =>
-            f.check_in && f.check_out &&
-            f.check_in === bookingCheckInDateString &&
-            f.check_out === bookingCheckOutDateString
-          );
-
-          if (debugBookingId && booking.id === debugBookingId) {
-            console.log(`[DEBUG] Booking: ${booking.id}`);
-            console.log(`[DEBUG] check_in String: ${bookingCheckInDateString} check_out String: ${bookingCheckOutDateString}`);
-            console.log(`[DEBUG] Candidates length: ${candidates.length}`);
-            if (candidates.length > 0) {
-              console.log(`[DEBUG] Candidate CheckIn: ${candidates[0].check_in} Candidate CheckOut: ${candidates[0].check_out}`);
-            }
-          }
-
-          if (candidates.length === 1) {
-            // Exactly 1 match — safe to enrich
-            const fact = candidates[0];
-            if (debugBookingId && booking.id === debugBookingId) {
-              console.log(`[DEBUG] Safe to enrich! Assigning ${fact.connection_id}`);
-            }
-            if (fact.guest_name && fact.guest_name !== 'Guest' && fact.guest_name !== 'Reserved') {
-              booking.guest_name = fact.guest_name;
-              // Derive first/last initial for display consistency
-              const parts = fact.guest_name.split(' ');
-              booking.guest_first_name = parts[0] || null;
-              booking.guest_last_initial = parts.length > 1 ? (parts[parts.length - 1]?.[0] || null) : null;
-            }
-            if (fact.guest_count != null) {
+            // Only safely augment guest count if booking has default
+            if ((booking.guest_count === null || booking.guest_count === 1) && fact.guest_count != null) {
               booking.guest_count = fact.guest_count;
             }
-            // Store the matched connection_id for color/label resolution on the client
-            booking.matched_connection_id = fact.connection_id;
-          } else if (debugBookingId && booking.id === debugBookingId) {
-            console.log(`[DEBUG] Skipped enrichment. candidates.length = ${candidates.length}`);
           }
-          // >1 candidates or 0: no enrichment — booking keeps its original values
         }
       }
+    }
+
+    // Prove Craig source
+    const craigTestBooking = filteredBookings.find((b: any) => b.id === '5fc990b4-3807-4b73-81b4-27e23fe2ff47');
+    if (craigTestBooking) {
+      console.log(`\n[DEBUG-CRAIG] booking_id: ${craigTestBooking.id}`);
+      console.log(`[DEBUG-CRAIG] DB guest_name: "${craigTestBooking.guest_name}"`);
+      console.log(`[DEBUG-CRAIG] DB raw_data.from_fact_id: ${craigTestBooking.raw_data?.from_fact_id || 'null'}`);
+      console.log(`[DEBUG-CRAIG] matched_connection_id: ${craigTestBooking.matched_connection_id || 'null'}\n`);
     }
   }
   // ─── END ENRICHMENT ─────────────────────────────────────────────────

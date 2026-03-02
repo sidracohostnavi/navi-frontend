@@ -6,10 +6,38 @@ type RouteContext = {
 };
 
 /**
+ * Matches EmailProcessor.isMaskedGuestName() exactly.
+ * A booking is unenriched if its guest_name matches any of these patterns.
+ */
+function isMaskedGuestName(name: string | null): boolean {
+    if (!name) return true;
+    const lower = name.toLowerCase();
+    if (['guest', 'reserved', 'blocked', 'not available', 'closed period'].includes(lower)) return true;
+    if (/(airbnb|vrbo|lodgify|booking\.com|via |expedia)/i.test(name)) return true;
+    if (/^[A-Z0-9_-]{6,20}$/.test(name) && /\d/.test(name)) return true;
+    if ((name.match(/\*/g) || []).length >= 5) return true;
+    return false;
+}
+
+/**
+ * Derive platform from confirmation code prefix.
+ * HM* = Airbnb, B + digits = Lodgify, else = Other
+ */
+function derivePlatform(confirmationCode: string | null): string {
+    if (!confirmationCode) return 'Other';
+    if (confirmationCode.startsWith('HM')) return 'Airbnb';
+    if (/^B\d/.test(confirmationCode)) return 'Lodgify';
+    return 'Other';
+}
+
+/**
  * POST /api/cohost/review/[id]/resolve
  * 
- * Resolve a review item by assigning it to a property.
- * Creates a new booking ONLY if no existing booking matches.
+ * Resolve a review item by:
+ *   1. Finding an unenriched booking on exact dates for the selected property → enrich it
+ *   2. If no unenriched booking found → return no_match for manual booking creation
+ *   3. Or create a manual booking if action = 'create_manual'
+ *   4. Or dismiss if action = 'dismiss'
  */
 export async function POST(request: Request, context: RouteContext) {
     try {
@@ -21,9 +49,10 @@ export async function POST(request: Request, context: RouteContext) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const { property_id, action } = await request.json();
+        const body = await request.json();
+        const { property_id, action, guest_name, guest_count, check_in, check_out, label_text } = body;
 
-        // Handle dismiss action
+        // ─── DISMISS ─────────────────────────────────────────────────────
         if (action === 'dismiss') {
             const { error: updateError } = await supabase
                 .from('enrichment_review_items')
@@ -35,11 +64,10 @@ export async function POST(request: Request, context: RouteContext) {
                 .eq('id', reviewItemId);
 
             if (updateError) throw updateError;
-
             return NextResponse.json({ success: true, action: 'dismissed' });
         }
 
-        // For assign action, property_id is required
+        // ─── VALIDATE INPUTS ─────────────────────────────────────────────
         if (!property_id) {
             return NextResponse.json({ error: 'Missing property_id' }, { status: 400 });
         }
@@ -53,6 +81,11 @@ export async function POST(request: Request, context: RouteContext) {
 
         if (fetchError || !reviewItem) {
             return NextResponse.json({ error: 'Review item not found' }, { status: 404 });
+        }
+
+        // IDEMPOTENCY: If already resolved, return success without re-processing
+        if (reviewItem.status === 'resolved') {
+            return NextResponse.json({ success: true, action: 'already_resolved' });
         }
 
         // 2. Validate user owns the workspace
@@ -79,83 +112,209 @@ export async function POST(request: Request, context: RouteContext) {
             return NextResponse.json({ error: 'Property not found or access denied' }, { status: 404 });
         }
 
-        // 4. Extract booking data
+        // 4. Extract data (allow overrides from editable fields)
         const extracted = reviewItem.extracted_data || {};
+        const finalGuestName = guest_name || extracted.guest_name || 'Guest';
+        const finalGuestCount = guest_count ?? extracted.guest_count ?? 1;
+        const finalCheckIn = check_in || extracted.check_in;
+        const finalCheckOut = check_out || extracted.check_out;
         const confirmationCode = extracted.confirmation_code;
-        const checkIn = extracted.check_in;
-        const checkOut = extracted.check_out;
-        const guestName = extracted.guest_name || 'Guest';
-        const guestCount = extracted.guest_count || 1;
+        const platform = derivePlatform(confirmationCode);
 
-        if (!checkIn || !checkOut) {
+        if (!finalCheckIn || !finalCheckOut) {
             return NextResponse.json({ error: 'Invalid review item: missing dates' }, { status: 400 });
         }
 
-        // 5. Check for existing booking with same confirmation code + property
-        if (confirmationCode) {
-            const { data: existingBooking } = await supabase
-                .from('bookings')
-                .select('id')
-                .eq('property_id', property_id)
-                .eq('reservation_code', confirmationCode)
-                .eq('is_active', true)
-                .single();
-
-            if (existingBooking) {
-                // Mark as resolved since booking already exists
-                await supabase
-                    .from('enrichment_review_items')
-                    .update({
-                        status: 'resolved',
-                        resolved_at: new Date().toISOString(),
-                        resolved_by: user.id
-                    })
-                    .eq('id', reviewItemId);
-
-                return NextResponse.json({
-                    success: true,
-                    action: 'already_exists',
-                    booking_id: existingBooking.id
-                });
-            }
-        }
-
-        // 6. Create new booking (parsed guest name)
-        const nameParts = guestName.split(' ');
-        const firstName = nameParts[0];
-        const lastInitial = nameParts.length > 1 ? nameParts[nameParts.length - 1].replace('.', '') : '';
-
-        const { data: newBooking, error: insertError } = await supabase
-            .from('bookings')
-            .insert({
-                workspace_id: reviewItem.workspace_id,
-                property_id: property_id,
-                source_type: 'email',
-                external_uid: `email-${reviewItemId}`,
-                reservation_code: confirmationCode || null,
-                check_in: new Date(checkIn).toISOString(),
-                check_out: new Date(checkOut).toISOString(),
-                guest_name: guestName,
-                guest_count: guestCount,
-                guest_first_name: firstName,
-                guest_last_initial: lastInitial,
-                status: 'confirmed',
-                platform: 'Airbnb',
-                is_active: true,
-                raw_data: {
-                    resolved_from_review: reviewItemId,
-                    original_extracted_data: extracted
-                }
-            })
-            .select()
+        // 5. Fetch connection info for label (name + color)
+        const { data: connection } = await supabase
+            .from('connections')
+            .select('id, name, color')
+            .eq('id', reviewItem.connection_id)
             .single();
 
-        if (insertError) {
-            console.error('[ResolveReview] Insert error:', insertError);
-            return NextResponse.json({ error: 'Failed to create booking: ' + insertError.message }, { status: 500 });
+        const connectionLabelName = connection?.name || null;
+        const connectionLabelColor = connection?.color || null;
+
+        // ─── MANUAL BOOKING CREATION ─────────────────────────────────────
+        if (action === 'create_manual') {
+            // Parse guest name into parts (match enrichBookings pattern)
+            const nameParts = finalGuestName.trim().split(/\s+/);
+            const firstName = nameParts[0];
+            const lastInitial = nameParts.length > 1
+                ? nameParts[nameParts.length - 1][0]
+                : '';
+            const displayName = `${firstName}${lastInitial ? ' ' + lastInitial + '.' : ''}`;
+
+            // Create reservation_fact first (for calendar connection link)
+            const { data: newFact, error: factError } = await supabase
+                .from('reservation_facts')
+                .insert({
+                    connection_id: reviewItem.connection_id,
+                    source_gmail_message_id: extracted.gmail_message_id || `manual-${reviewItemId}`,
+                    check_in: finalCheckIn,
+                    check_out: finalCheckOut,
+                    guest_name: finalGuestName,
+                    guest_count: finalGuestCount,
+                    confirmation_code: confirmationCode || null,
+                    listing_name: extracted.listing_name || null,
+                    confidence: 1.0,
+                    raw_data: {
+                        source: 'manual_review_assignment',
+                        review_item_id: reviewItemId,
+                        label_text: label_text || null
+                    }
+                })
+                .select('id')
+                .single();
+
+            if (factError) {
+                console.error('[ResolveReview] Failed to create reservation_fact:', factError);
+                return NextResponse.json({ error: 'Failed to create reservation fact' }, { status: 500 });
+            }
+
+            // Insert manual booking
+            const { data: newBooking, error: insertError } = await supabase
+                .from('bookings')
+                .insert({
+                    workspace_id: reviewItem.workspace_id,
+                    property_id: property_id,
+                    source_type: 'manual',
+                    external_uid: `manual-${reviewItemId}`,
+                    reservation_code: confirmationCode || null,
+                    check_in: new Date(finalCheckIn + 'T12:00:00Z').toISOString(),
+                    check_out: new Date(finalCheckOut + 'T12:00:00Z').toISOString(),
+                    guest_name: displayName,
+                    guest_count: finalGuestCount,
+                    guest_first_name: firstName,
+                    guest_last_initial: lastInitial,
+                    platform: label_text || platform,
+                    status: 'confirmed',
+                    is_active: true,
+                    raw_data: {
+                        from_fact_id: newFact.id,
+                        resolved_from_review: reviewItemId,
+                        manual_booking: true,
+                        label_text: label_text || null,
+                        connection_label_name: connectionLabelName,
+                        connection_label_color: connectionLabelColor
+                    }
+                })
+                .select('id')
+                .single();
+
+            if (insertError) {
+                console.error('[ResolveReview] Manual booking insert error:', insertError);
+                return NextResponse.json({ error: 'Failed to create manual booking: ' + insertError.message }, { status: 500 });
+            }
+
+            // Mark review item as resolved
+            await supabase
+                .from('enrichment_review_items')
+                .update({
+                    status: 'resolved',
+                    resolved_at: new Date().toISOString(),
+                    resolved_by: user.id
+                })
+                .eq('id', reviewItemId);
+
+            console.log(`[ResolveReview] Created manual booking ${newBooking.id} for property ${property_id}`);
+
+            return NextResponse.json({
+                success: true,
+                action: 'manual_created',
+                booking_id: newBooking.id
+            });
         }
 
-        // 7. Mark review item as resolved
+        // ─── STANDARD ASSIGNMENT FLOW ────────────────────────────────────
+
+        // 6. Look for unenriched booking on exact dates for selected property
+        const { data: candidateBookings } = await supabase
+            .from('bookings')
+            .select('id, guest_name, check_in, check_out, raw_data')
+            .eq('property_id', property_id)
+            .eq('is_active', true);
+
+        // Filter to exact date match + masked guest name
+        const unenrichedMatches = (candidateBookings || []).filter((b: any) => {
+            const bIn = new Date(b.check_in).toISOString().split('T')[0];
+            const bOut = new Date(b.check_out).toISOString().split('T')[0];
+            return bIn === finalCheckIn && bOut === finalCheckOut && isMaskedGuestName(b.guest_name);
+        });
+
+        // ─── NO MATCH → signal UI for manual booking ────────────────────
+        if (unenrichedMatches.length === 0) {
+            return NextResponse.json({
+                success: false,
+                action: 'no_match',
+                message: 'No unenriched booking found on those dates for this property.',
+                platform: platform
+            });
+        }
+
+        // ─── MATCH FOUND → enrich the booking ──────────────────────────
+        // If multiple unenriched matches, take the first one (user explicitly chose the property)
+        const targetBooking = unenrichedMatches[0];
+
+        // Parse guest name (match enrichBookings pattern exactly)
+        const nameParts = finalGuestName.trim().split(/\s+/);
+        const firstName = nameParts[0];
+        const lastInitial = nameParts.length > 1
+            ? nameParts[nameParts.length - 1][0]
+            : '';
+        const displayName = `${firstName}${lastInitial ? ' ' + lastInitial + '.' : ''}`;
+
+        // Create reservation_fact (for calendar connection link via from_fact_id)
+        const { data: newFact, error: factError } = await supabase
+            .from('reservation_facts')
+            .insert({
+                connection_id: reviewItem.connection_id,
+                source_gmail_message_id: extracted.gmail_message_id || `review-${reviewItemId}`,
+                check_in: finalCheckIn,
+                check_out: finalCheckOut,
+                guest_name: finalGuestName,
+                guest_count: finalGuestCount,
+                confirmation_code: confirmationCode || null,
+                listing_name: extracted.listing_name || null,
+                confidence: 1.0,
+                raw_data: {
+                    source: 'review_assignment',
+                    review_item_id: reviewItemId
+                }
+            })
+            .select('id')
+            .single();
+
+        if (factError) {
+            console.error('[ResolveReview] Failed to create reservation_fact:', factError);
+            return NextResponse.json({ error: 'Failed to create reservation fact' }, { status: 500 });
+        }
+
+        // Update booking with guest info (exact enrichBookings field pattern)
+        const { error: updateError } = await supabase
+            .from('bookings')
+            .update({
+                guest_name: displayName,
+                guest_count: finalGuestCount,
+                guest_first_name: firstName,
+                guest_last_initial: lastInitial,
+                raw_data: {
+                    ...targetBooking.raw_data,
+                    from_fact_id: newFact.id,
+                    enriched_from_review: reviewItemId,
+                    enrichment_reason: 'review_assignment',
+                    connection_label_name: connectionLabelName,
+                    connection_label_color: connectionLabelColor
+                }
+            })
+            .eq('id', targetBooking.id);
+
+        if (updateError) {
+            console.error('[ResolveReview] Booking update error:', updateError);
+            return NextResponse.json({ error: 'Failed to update booking: ' + updateError.message }, { status: 500 });
+        }
+
+        // Mark review item as resolved
         await supabase
             .from('enrichment_review_items')
             .update({
@@ -165,12 +324,12 @@ export async function POST(request: Request, context: RouteContext) {
             })
             .eq('id', reviewItemId);
 
-        console.log(`[ResolveReview] Created booking ${newBooking.id} for property ${property_id}`);
+        console.log(`[ResolveReview] Enriched booking ${targetBooking.id} → ${displayName} for property ${property_id}`);
 
         return NextResponse.json({
             success: true,
-            action: 'created',
-            booking_id: newBooking.id
+            action: 'enriched',
+            booking_id: targetBooking.id
         });
 
     } catch (err: any) {
