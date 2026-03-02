@@ -59,11 +59,13 @@ type Booking = {
 };
 
 // --- Constants ---
-const CELL_WIDTH = 140; // px
-const ROW_HEIGHT = 80; // px
-const HEADER_HEIGHT = 60; // px
-const MIN_SIDEBAR_WIDTH = 180;
-const MAX_SIDEBAR_WIDTH = 420;
+// Responsive layout: tighter on mobile for scannability
+const IS_MOBILE = typeof window !== 'undefined' && window.innerWidth < 768;
+const CELL_WIDTH = IS_MOBILE ? 64 : 140;
+const ROW_HEIGHT = IS_MOBILE ? 56 : 80;
+const HEADER_HEIGHT = IS_MOBILE ? 48 : 60;
+const MIN_SIDEBAR_WIDTH = IS_MOBILE ? 52 : 180;
+const MAX_SIDEBAR_WIDTH = IS_MOBILE ? 52 : 420;
 
 const TODAY = new Date();
 // Range Limits: -12 Months to +24 Months
@@ -153,6 +155,7 @@ const DEFAULT_BOOKING_COLOR = '#e5e7eb'; // gray-200
 
 export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [permissions, setPermissions] = useState<FeaturePermissions | null>(null);
+  const [userRole, setUserRole] = useState<string>('');
 
   useEffect(() => {
     async function fetchRole() {
@@ -160,17 +163,20 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         const res = await fetch('/api/cohost/users/role');
         if (res.ok) {
           const data = await res.json();
+          setUserRole(data.role || '');
           setPermissions(getPermissionsForRole(data.role));
         }
       } catch { }
     }
     fetchRole();
   }, []);
+
+  const isCleaner = userRole === 'cleaner';
   const supabase = createClient();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Layout State
-  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [sidebarWidth, setSidebarWidth] = useState(IS_MOBILE ? 52 : 260);
   const [isResizing, setIsResizing] = useState(false);
 
   // Infinite Scroll & Navigation State
@@ -747,20 +753,22 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                   className={`sticky left-0 z-50 bg-white border-r border-gray-200 p-4 flex flex-col justify-center shadow-[4px_0_12px_-4px_rgba(0,0,0,0.05)] ${rowClass}`}
                   style={{ gridColumn: '1', gridRow: gridRow, height: ROW_HEIGHT }}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className={`flex items-center ${IS_MOBILE ? 'justify-center' : 'gap-3'}`}>
                     {property.image ? (
-                      <div className="w-8 h-8 rounded-full overflow-hidden border border-gray-200 flex-shrink-0">
+                      <div className={`${IS_MOBILE ? 'w-9 h-9' : 'w-8 h-8'} rounded-full overflow-hidden border border-gray-200 flex-shrink-0`}>
                         <img src={property.image} alt={property.name} className="w-full h-full object-cover" />
                       </div>
                     ) : (
-                      <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 border border-blue-200 flex-shrink-0">
+                      <div className={`${IS_MOBILE ? 'w-9 h-9' : 'w-8 h-8'} bg-blue-100 rounded-full flex items-center justify-center text-blue-600 border border-blue-200 flex-shrink-0`}>
                         <span className="text-xs font-bold">{property.name.charAt(0)}</span>
                       </div>
                     )}
-                    <div className="min-w-0">
-                      <p className="font-medium text-gray-900 truncate text-sm">{property.name}</p>
-                      <p className="text-[10px] text-gray-500 truncate">Entire home</p>
-                    </div>
+                    {!IS_MOBILE && (
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-900 truncate text-sm">{property.name}</p>
+                        <p className="text-[10px] text-gray-500 truncate">Entire home</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -882,18 +890,31 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                       labelText = connectionIdNameMap.get(booking.manualConnectionId) || '';
                     }
                   } else if (booking.matchedConnectionId) {
-                    // Server-side enriched: guest_name + guest_count already set by API
                     displayGuestName = booking.guestName || 'Reservation';
                     displayGuestCount = booking.guestCount;
                     resolvedConnectionColor = getConnectionColor(booking.matchedConnectionId);
                     labelText = connectionIdNameMap.get(booking.matchedConnectionId) || '';
                   } else if (booking.guestName && !['Guest', 'Reserved', 'Blocked', 'Not Available'].includes(booking.guestName)) {
-                    // Enriched during iCal ingestion (DB has the name already)
                     displayGuestName = booking.guestName;
                     displayGuestCount = booking.guestCount;
                   }
 
-                  if (isEnriched && resolvedConnectionColor) {
+                  // CLEANER OVERRIDE: mask private data, force uniform appearance
+                  if (isCleaner) {
+                    displayGuestName = 'Reservation';
+                    labelText = '';
+                    resolvedConnectionColor = null;
+                  }
+
+                  if (isCleaner) {
+                    // Cleaner view: all bookings render in pastel coral
+                    finalStyle = {
+                      backgroundColor: '#FFF0ED',
+                      borderColor: '#FFD1C9',
+                      borderWidth: '1.5px',
+                    };
+                    finalClasses = 'text-xs font-medium border text-gray-800 shadow-sm';
+                  } else if (isEnriched && resolvedConnectionColor) {
                     // Enriched: translucent connection color fill, slightly darker solid border
                     finalStyle = {
                       backgroundColor: `${resolvedConnectionColor}cc`,
@@ -974,7 +995,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                         `}
                                 style={finalStyle}
                                 onMouseEnter={(e) => {
-                                  if (!isEnriched) return;
+                                  if (!isEnriched && !isCleaner) return;
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   setHoveredBooking({ booking, rect, displayGuestName, displayGuestCount: displayGuestCount || 0, labelText, above: rowIdx !== 0 });
                                 }}
@@ -1099,12 +1120,12 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
           className="min-w-[180px]"
         >
           <div className="bg-gray-900 text-white text-xs rounded-lg py-3 px-3 shadow-xl ring-1 ring-white/10">
-            <p className="font-bold text-sm mb-1.5">{hoveredBooking.displayGuestName}</p>
+            <p className="font-bold text-sm mb-1.5">{isCleaner ? 'Reservation' : hoveredBooking.displayGuestName}</p>
             <div className="space-y-1 text-left">
               <p className="opacity-80 flex justify-between"><span>Guests:</span> <span>{hoveredBooking.displayGuestCount || '-'}</span></p>
               <p className="opacity-80 flex justify-between"><span>Check-in:</span> <span className="font-mono">{new Date(hoveredBooking.booking.startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).replace(/, /, '-').replace(' ', '-')}</span></p>
               <p className="opacity-80 flex justify-between"><span>Check-out:</span> <span className="font-mono">{new Date(hoveredBooking.booking.endDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).replace(/, /, '-').replace(' ', '-')}</span></p>
-              {hoveredBooking.labelText && (
+              {!isCleaner && hoveredBooking.labelText && (
                 <p className="opacity-80 flex justify-between pt-1 mt-1 border-t border-white/10"><span>Source:</span> <span className="font-bold">{hoveredBooking.labelText}</span></p>
               )}
             </div>
