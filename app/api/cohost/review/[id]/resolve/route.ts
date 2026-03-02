@@ -145,32 +145,50 @@ export async function POST(request: Request, context: RouteContext) {
                 : '';
             const displayName = `${firstName}${lastInitial ? ' ' + lastInitial + '.' : ''}`;
 
-            // Create reservation_fact first (for calendar connection link)
-            const { data: newFact, error: factError } = await supabase
-                .from('reservation_facts')
-                .insert({
-                    connection_id: reviewItem.connection_id,
-                    source_gmail_message_id: extracted.gmail_message_id || `manual-${reviewItemId}`,
-                    check_in: finalCheckIn,
-                    check_out: finalCheckOut,
-                    guest_name: finalGuestName,
-                    guest_count: finalGuestCount,
-                    confirmation_code: confirmationCode || null,
-                    listing_name: extracted.listing_name || null,
-                    confidence: 1.0,
-                    raw_data: {
-                        source: 'manual_review_assignment',
-                        review_item_id: reviewItemId,
-                        label_text: label_text || null
-                    }
-                })
-                .select('id')
-                .single();
-
-            if (factError) {
-                console.error('[ResolveReview] Failed to create reservation_fact:', factError);
-                return NextResponse.json({ error: 'Failed to create reservation fact' }, { status: 500 });
+            // Upsert reservation_fact — reuse existing if confirmation_code already exists
+            let factId: string | null = null;
+            if (confirmationCode) {
+                const { data: existingFact } = await supabase
+                    .from('reservation_facts')
+                    .select('id')
+                    .eq('confirmation_code', confirmationCode)
+                    .single();
+                if (existingFact) {
+                    // Update existing fact with correct guest info & dates
+                    await supabase.from('reservation_facts').update({
+                        guest_name: finalGuestName,
+                        guest_count: finalGuestCount,
+                        check_in: finalCheckIn,
+                        check_out: finalCheckOut,
+                    }).eq('id', existingFact.id);
+                    factId = existingFact.id;
+                    console.log(`[ResolveReview] Reused existing fact ${factId} for code ${confirmationCode}`);
+                }
             }
+            if (!factId) {
+                const { data: newFact, error: factError } = await supabase
+                    .from('reservation_facts')
+                    .insert({
+                        connection_id: reviewItem.connection_id,
+                        source_gmail_message_id: (extracted.gmail_message_id && !extracted.gmail_message_id.startsWith('manual-')) ? extracted.gmail_message_id : null,
+                        check_in: finalCheckIn,
+                        check_out: finalCheckOut,
+                        guest_name: finalGuestName,
+                        guest_count: finalGuestCount,
+                        confirmation_code: confirmationCode || null,
+                        listing_name: extracted.listing_name || null,
+                        confidence: 1.0,
+                        raw_data: { source: 'manual_review_assignment', review_item_id: reviewItemId, label_text: label_text || null }
+                    })
+                    .select('id')
+                    .single();
+                if (factError || !newFact) {
+                    console.error('[ResolveReview] Failed to create reservation_fact:', factError);
+                    return NextResponse.json({ error: 'Failed to create reservation fact' }, { status: 500 });
+                }
+                factId = newFact.id;
+            }
+            const newFact = { id: factId };
 
             // Insert manual booking
             const { data: newBooking, error: insertError } = await supabase
@@ -264,31 +282,50 @@ export async function POST(request: Request, context: RouteContext) {
             : '';
         const displayName = `${firstName}${lastInitial ? ' ' + lastInitial + '.' : ''}`;
 
-        // Create reservation_fact (for calendar connection link via from_fact_id)
-        const { data: newFact, error: factError } = await supabase
-            .from('reservation_facts')
-            .insert({
-                connection_id: reviewItem.connection_id,
-                source_gmail_message_id: extracted.gmail_message_id || `review-${reviewItemId}`,
-                check_in: finalCheckIn,
-                check_out: finalCheckOut,
-                guest_name: finalGuestName,
-                guest_count: finalGuestCount,
-                confirmation_code: confirmationCode || null,
-                listing_name: extracted.listing_name || null,
-                confidence: 1.0,
-                raw_data: {
-                    source: 'review_assignment',
-                    review_item_id: reviewItemId
-                }
-            })
-            .select('id')
-            .single();
-
-        if (factError) {
-            console.error('[ResolveReview] Failed to create reservation_fact:', factError);
-            return NextResponse.json({ error: 'Failed to create reservation fact' }, { status: 500 });
+        // Upsert reservation_fact — reuse existing if confirmation_code already exists
+        let factId: string | null = null;
+        if (confirmationCode) {
+            const { data: existingFact } = await supabase
+                .from('reservation_facts')
+                .select('id')
+                .eq('confirmation_code', confirmationCode)
+                .single();
+            if (existingFact) {
+                // Update existing fact with correct guest info & dates
+                await supabase.from('reservation_facts').update({
+                    guest_name: finalGuestName,
+                    guest_count: finalGuestCount,
+                    check_in: finalCheckIn,
+                    check_out: finalCheckOut,
+                }).eq('id', existingFact.id);
+                factId = existingFact.id;
+                console.log(`[ResolveReview] Reused existing fact ${factId} for code ${confirmationCode}`);
+            }
         }
+        if (!factId) {
+            const { data: newFact, error: factError } = await supabase
+                .from('reservation_facts')
+                .insert({
+                    connection_id: reviewItem.connection_id,
+                    source_gmail_message_id: (extracted.gmail_message_id && !extracted.gmail_message_id.startsWith('manual-')) ? extracted.gmail_message_id : null,
+                    check_in: finalCheckIn,
+                    check_out: finalCheckOut,
+                    guest_name: finalGuestName,
+                    guest_count: finalGuestCount,
+                    confirmation_code: confirmationCode || null,
+                    listing_name: extracted.listing_name || null,
+                    confidence: 1.0,
+                    raw_data: { source: 'review_assignment', review_item_id: reviewItemId }
+                })
+                .select('id')
+                .single();
+            if (factError || !newFact) {
+                console.error('[ResolveReview] Failed to create reservation_fact:', factError);
+                return NextResponse.json({ error: 'Failed to create reservation fact' }, { status: 500 });
+            }
+            factId = newFact.id;
+        }
+        const newFact = { id: factId };
 
         // Update booking with guest info (exact enrichBookings field pattern)
         const { error: updateError } = await supabase
