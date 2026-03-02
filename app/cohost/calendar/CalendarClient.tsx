@@ -1071,11 +1071,11 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                           <div
                             className="absolute pointer-events-none"
                             style={{
-                              left: CELL_WIDTH * 0.30,
+                              left: IS_MOBILE ? CELL_WIDTH * 0.40 : CELL_WIDTH * 0.30,
                               top: '50%',
-                              transform: 'translate(-50%, -50%)',
+                              transform: 'translate(-50%, -50%) rotate(-45deg)', // Stand it upright
                               zIndex: 20,
-                              fontSize: '28px',
+                              fontSize: IS_MOBILE ? '16px' : '20px', // Smaller footprint
                               lineHeight: 1,
                             }}
                             title="Checkout cleaning"
