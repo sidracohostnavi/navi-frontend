@@ -487,14 +487,11 @@ export default function ReviewPage() {
                                                             </span>
                                                         </p>
                                                     )}
-                                                    {/* Platform (derived from code) */}
+                                                    {/* Label (connection name) */}
                                                     <p>
-                                                        <span className="font-medium">Platform:</span>{' '}
-                                                        <span className={`text-xs px-1.5 py-0.5 rounded ${platform === 'Airbnb' ? 'bg-rose-100 text-rose-700' :
-                                                            platform === 'Lodgify' ? 'bg-blue-100 text-blue-700' :
-                                                                'bg-gray-100 text-gray-600'
-                                                            }`}>
-                                                            {platform}
+                                                        <span className="font-medium">Label:</span>{' '}
+                                                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">
+                                                            {(item as any).connections?.name || platform}
                                                         </span>
                                                     </p>
                                                 </div>

@@ -43,7 +43,7 @@ export async function GET() {
         // Fetch pending review items
         const { data: items, error } = await supabase
             .from('enrichment_review_items')
-            .select('id, workspace_id, connection_id, status, extracted_data, suggested_matches, created_at')
+            .select('id, workspace_id, connection_id, status, extracted_data, suggested_matches, created_at, connections(name)')
             .eq('workspace_id', workspaceId)
             .eq('status', 'pending')
             .order('created_at', { ascending: false });
