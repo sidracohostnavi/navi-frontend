@@ -1070,7 +1070,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                           <div
                             className="absolute pointer-events-none"
                             style={{
-                              left: IS_MOBILE ? CELL_WIDTH * 0.15 : CELL_WIDTH * 0.30,
+                              left: IS_MOBILE ? CELL_WIDTH * 0.50 : CELL_WIDTH * 0.30,
                               top: '50%',
                               transform: 'translate(-50%, -50%)',
                               zIndex: 20,
