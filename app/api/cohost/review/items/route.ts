@@ -40,21 +40,12 @@ export async function GET() {
 
         console.log(`[ReviewItems] ACCESS GRANTED: User ${user.id} -> Workspace ${workspaceId} (${membership.role})`);
 
-        // Debug: count all items in DB for this workspace
-        const { count: totalCount } = await supabase
-            .from('enrichment_review_items')
-            .select('*', { count: 'exact', head: true })
-            .eq('workspace_id', workspaceId)
-            .eq('status', 'pending');
-
-        console.log(`[ReviewItems] Workspace ${workspaceId} has ${totalCount} pending items`);
-
-        // Fetch pending review items with correct schema
+        // Fetch pending review items
         const { data: items, error } = await supabase
             .from('enrichment_review_items')
             .select('id, workspace_id, connection_id, status, extracted_data, suggested_matches, created_at')
             .eq('workspace_id', workspaceId)
-            // .eq('status', 'pending') // <--- REMOVED FILTER for debugging
+            .eq('status', 'pending')
             .order('created_at', { ascending: false });
 
         if (error) {
