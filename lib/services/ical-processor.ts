@@ -245,38 +245,43 @@ export class ICalProcessor {
                     }
                 }
 
-                // 7. Safe Lookup & Write Booking
+                // 7. Safe Lookup & Write Booking (Law 16: external_uid + property_id first)
                 let targetBooking: any = undefined;
 
                 try {
-                    const inDateStr = start.toISOString().split('T')[0];
-                    const outDateStr = end.toISOString().split('T')[0];
-
-                    const nextIn = new Date(start);
-                    nextIn.setUTCDate(nextIn.getUTCDate() + 1);
-                    const nextInStr = nextIn.toISOString().split('T')[0];
-
-                    const nextOut = new Date(end);
-                    nextOut.setUTCDate(nextOut.getUTCDate() + 1);
-                    const nextOutStr = nextOut.toISOString().split('T')[0];
-
-                    const { data: existing, error: searchError } = await supabase
+                    // Step 1: Look up by canonical identity (external_uid + property_id)
+                    const { data: uidMatch, error: uidError } = await supabase
                         .from('bookings')
                         .select('id, check_in, check_out, guest_name, guest_count, status, is_active, platform, external_uid, raw_data')
                         .eq('workspace_id', workspaceId)
                         .eq('property_id', feed.property_id)
-                        .eq('is_active', true)
-                        .gte('check_in', `${inDateStr}T00:00:00.000Z`)
-                        .lt('check_in', `${nextInStr}T00:00:00.000Z`)
-                        .gte('check_out', `${outDateStr}T00:00:00.000Z`)
-                        .lt('check_out', `${nextOutStr}T00:00:00.000Z`)
-                        .order('last_synced_at', { ascending: false, nullsFirst: false })
-                        .limit(2);
+                        .eq('external_uid', canonicalUid)
+                        .limit(1)
+                        .maybeSingle();
 
-                    if (!searchError && existing && existing.length > 0) {
-                        targetBooking = existing[0];
-                        if (existing.length > 1) {
-                            console.warn(`[ICalProcessor] Multiple booking matches for date window ${inDateStr} to ${outDateStr}... choosing most recent`);
+                    if (!uidError && uidMatch) {
+                        targetBooking = uidMatch;
+                    }
+
+                    // Step 2: Fallback — exact date match (no window) on same property only
+                    if (!targetBooking) {
+                        const inDateStr = start.toISOString().split('T')[0];
+                        const outDateStr = end.toISOString().split('T')[0];
+
+                        const { data: dateMatch, error: dateError } = await supabase
+                            .from('bookings')
+                            .select('id, check_in, check_out, guest_name, guest_count, status, is_active, platform, external_uid, raw_data')
+                            .eq('workspace_id', workspaceId)
+                            .eq('property_id', feed.property_id)
+                            .eq('is_active', true)
+                            .eq('check_in', `${inDateStr}T12:00:00.000Z`)
+                            .eq('check_out', `${outDateStr}T12:00:00.000Z`)
+                            .order('last_synced_at', { ascending: false, nullsFirst: false })
+                            .limit(1)
+                            .maybeSingle();
+
+                        if (!dateError && dateMatch) {
+                            targetBooking = dateMatch;
                         }
                     }
                 } catch (e) {

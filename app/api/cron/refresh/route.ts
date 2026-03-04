@@ -52,8 +52,7 @@ export async function GET(request: Request) {
             throw new Error(`Failed to fetch iCal feeds: ${feedsError?.message}`);
         }
 
-        const BATCH_SIZE = 1;
-        const feeds = allFeeds.slice(0, BATCH_SIZE);
+        const feeds = allFeeds; // Process all active feeds every cycle
         const selectedFeedIds = feeds.map(f => f.id);
 
         console.log(`CRON_REFRESH_HIT ${new Date().toISOString()}`);
@@ -103,23 +102,15 @@ export async function GET(request: Request) {
             } // no-op
         }
 
-        // 4. Gate Gmail ingestion based on iCal changes
-        if (totalProcessedCount === 0) {
-            console.log(JSON.stringify({ event: "cron_refresh_end", status: "no_changes", duration_ms: Date.now() - start }));
-            return NextResponse.json({
-                status: "no_changes",
-                feeds_total: allFeeds.length,
-                feeds_processed: feeds.length,
-                feed_ids_processed: selectedFeedIds,
-                gmail_triggered: false
-            });
-        }
+        // 4. Gmail ingestion runs unconditionally (owner-authorized, supersedes former Law 14)
 
-        // 5. Gmail Ingestion + Enrichment for affected workspaces
+        // 5. Gmail Ingestion + Enrichment for ALL workspaces
         const connectionsSynced: string[] = [];
         const gmailFailedConnections: string[] = [];
 
-        for (const workspaceId of Array.from(affectedWorkspaceIds)) {
+        const allWorkspaceIds = new Set(workspaceMap.values());
+
+        for (const workspaceId of Array.from(allWorkspaceIds)) {
             const { data: connections } = await supabase
                 .from('connections')
                 .select('id')

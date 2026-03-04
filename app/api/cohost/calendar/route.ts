@@ -101,12 +101,28 @@ export async function GET(request: NextRequest) {
   if (filteredBookings.length > 0) {
     const factIdsToFetch = new Set<string>();
 
+    // DEBUG: Count bookings with raw_data
+    let hasRawData = 0;
+    let hasFromFactId = 0;
+    let noRawData = 0;
+
     for (const booking of filteredBookings) {
       // Collect specific fact IDs that were explicitly linked during background processing
-      const fromFactId = booking.raw_data?.from_fact_id;
-      if (fromFactId) {
-        factIdsToFetch.add(fromFactId);
+      if (booking.raw_data) {
+        hasRawData++;
+        const fromFactId = booking.raw_data?.from_fact_id;
+        if (fromFactId) {
+          hasFromFactId++;
+          factIdsToFetch.add(fromFactId);
+        }
+      } else {
+        noRawData++;
       }
+    }
+
+    console.log(`[DEBUG-PIPELINE] Total bookings: ${filteredBookings.length}, hasRawData: ${hasRawData}, noRawData: ${noRawData}, hasFromFactId: ${hasFromFactId}, factIdsToFetch: ${factIdsToFetch.size}`);
+    if (factIdsToFetch.size > 0) {
+      console.log(`[DEBUG-PIPELINE] Fact IDs to fetch: ${JSON.stringify(Array.from(factIdsToFetch))}`);
     }
 
     if (factIdsToFetch.size > 0) {
@@ -115,12 +131,20 @@ export async function GET(request: NextRequest) {
         .select('id, connection_id, guest_count')
         .in('id', Array.from(factIdsToFetch));
 
+      console.log(`[DEBUG-PIPELINE] Facts returned from DB: ${facts?.length || 0}`);
+      if (facts) {
+        for (const f of facts) {
+          console.log(`[DEBUG-PIPELINE] Fact ${f.id} → connection_id: ${f.connection_id}`);
+        }
+      }
+
       if (facts && facts.length > 0) {
         const factMap = new Map();
         for (const f of facts) {
           factMap.set(f.id, f);
         }
 
+        let matchedCount = 0;
         for (const booking of filteredBookings) {
           const fromFactId = booking.raw_data?.from_fact_id;
           if (!fromFactId) continue;
@@ -129,6 +153,7 @@ export async function GET(request: NextRequest) {
           if (fact) {
             // Assign explicitly linked connection for UI colors
             booking.matched_connection_id = fact.connection_id;
+            matchedCount++;
 
             // Only safely augment guest count if booking has default
             if ((booking.guest_count === null || booking.guest_count === 1) && fact.guest_count != null) {
@@ -136,7 +161,10 @@ export async function GET(request: NextRequest) {
             }
           }
         }
+        console.log(`[DEBUG-PIPELINE] Bookings matched with connection_id: ${matchedCount}`);
       }
+    } else {
+      console.log(`[DEBUG-PIPELINE] NO fact IDs to fetch — pipeline did not execute`);
     }
 
     // Prove Craig source
@@ -255,7 +283,7 @@ export async function GET(request: NextRequest) {
     const gn = b.guest_name.toLowerCase();
 
     // Substring match for keywords
-    const keywords = ['cleaning', 'maintenance', 'hold', 'blocked', 'unavailable', 'reservation', 'reserved'];
+    const keywords = ['cleaning', 'maintenance', 'hold', 'blocked', 'unavailable'];
     if (keywords.some(k => gn.includes(k))) return true;
 
     // Exact match for old ones
