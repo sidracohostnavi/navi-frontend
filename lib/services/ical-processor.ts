@@ -214,45 +214,15 @@ export class ICalProcessor {
                     }
                 }
 
-                // 6. Preserve existing real guest names (don't overwrite with masked names)
-                const isMaskedName = (n: string | null | undefined) => {
-                    if (!n) return false;
-                    return ['Reserved', 'Blocked', 'Not available', 'Unknown', 'Private'].some(m =>
-                        n.toLowerCase() === m.toLowerCase() || n.toLowerCase().startsWith(m.toLowerCase())
-                    );
-                };
 
-                // Check if booking already exists with a real (non-masked) guest name
-                if (isMaskedName(guestName)) {
-                    try {
-                        const { data: existing } = await supabase
-                            .from('bookings')
-                            .select('guest_name, guest_first_name, guest_last_initial')
-                            .eq('property_id', feed.property_id)
-                            .eq('source_type', feed.source_type)
-                            .eq('external_uid', canonicalUid)
-                            .single();
-
-                        if (existing?.guest_name && !isMaskedName(existing.guest_name)) {
-                            // Preserve the existing real name
-                            guestName = existing.guest_name;
-                            guestFirst = existing.guest_first_name;
-                            guestLastInitial = existing.guest_last_initial;
-                            console.log(`[ICalProcessor] Preserved existing guest name "${guestName}" for ${uid}`);
-                        }
-                    } catch (e) {
-                        // No existing booking, that's fine
-                    }
-                }
-
-                // 7. Safe Lookup & Write Booking (Law 16: external_uid + property_id first)
+                // 6. Safe Lookup & Write Booking (Law 16: external_uid + property_id first)
                 let targetBooking: any = undefined;
 
                 try {
                     // Step 1: Look up by canonical identity (external_uid + property_id)
                     const { data: uidMatch, error: uidError } = await supabase
                         .from('bookings')
-                        .select('id, check_in, check_out, guest_name, guest_count, status, is_active, platform, external_uid, raw_data')
+                        .select('id, check_in, check_out, guest_name, guest_first_name, guest_last_initial, guest_count, status, is_active, platform, external_uid, raw_data')
                         .eq('workspace_id', workspaceId)
                         .eq('property_id', feed.property_id)
                         .eq('external_uid', canonicalUid)
@@ -270,7 +240,7 @@ export class ICalProcessor {
 
                         const { data: dateMatch, error: dateError } = await supabase
                             .from('bookings')
-                            .select('id, check_in, check_out, guest_name, guest_count, status, is_active, platform, external_uid, raw_data')
+                            .select('id, check_in, check_out, guest_name, guest_first_name, guest_last_initial, guest_count, status, is_active, platform, external_uid, raw_data')
                             .eq('workspace_id', workspaceId)
                             .eq('property_id', feed.property_id)
                             .eq('is_active', true)
@@ -288,17 +258,27 @@ export class ICalProcessor {
                     console.error('[ICalProcessor] Failed to query existing booking:', e);
                 }
 
-                // If the existing booking was manually enriched, always preserve the stored guest name
-                // and lock enriched_from_fact as true — iCal sync must never overwrite manual assignments
-                if (targetBooking?.raw_data?.enriched_manually) {
-                    if (targetBooking.guest_name && !isMaskedName(targetBooking.guest_name)) {
+                // 6b. Preserve existing real guest names — universal guard
+                // If targetBooking has a real (non-masked) name, always keep it.
+                // Protects names set by enrichBookings(), manual review, or prior sync.
+                const isMaskedName = (n: string | null | undefined) => {
+                    if (!n) return true;
+                    return ['Reserved', 'Blocked', 'Not available', 'Unknown', 'Private'].some(m =>
+                        n.toLowerCase() === m.toLowerCase() || n.toLowerCase().startsWith(m.toLowerCase())
+                    );
+                };
+
+                if (targetBooking) {
+                    // Preserve enriched_from_fact flag if already set
+                    enriched = enriched || !!(targetBooking.raw_data?.from_fact_id);
+
+                    // If existing booking has a real guest name and iCal is sending a masked one, keep the real name
+                    if (isMaskedName(guestName) && targetBooking.guest_name && !isMaskedName(targetBooking.guest_name)) {
                         guestName = targetBooking.guest_name;
                         guestFirst = targetBooking.guest_first_name || guestFirst;
                         guestLastInitial = targetBooking.guest_last_initial || guestLastInitial;
-                        console.log(`[ICalProcessor] Manually enriched booking — preserved guest name "${guestName}" for ${uid}`);
+                        console.log(`[ICalProcessor] Preserved existing guest name "${guestName}" for ${uid}`);
                     }
-                    // Also ensure enriched_from_fact stays true when from_fact_id is present
-                    enriched = enriched || !!(targetBooking?.raw_data?.from_fact_id);
                 }
 
 

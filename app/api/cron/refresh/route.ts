@@ -71,8 +71,16 @@ export async function GET(request: Request) {
         let totalProcessedCount = 0;
         const affectedWorkspaceIds = new Set<string>();
 
-        // 3. Process iCal Feeds sequentially
+        // 3. Process iCal Feeds sequentially (time-budgeted)
+        const TIME_BUDGET_MS = 45000; // Stop after 45s to leave room for Gmail
+
         for (const feed of feeds) {
+            // Check time budget before starting next feed
+            if (Date.now() - start > TIME_BUDGET_MS) {
+                console.log(`[CRON] Time budget exhausted after ${Date.now() - start}ms, processed ${totalProcessedCount} events`);
+                break;
+            }
+
             const workspaceId = workspaceMap.get(feed.property_id);
 
             if (!workspaceId) {
