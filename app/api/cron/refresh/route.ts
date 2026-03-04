@@ -72,7 +72,7 @@ export async function GET(request: Request) {
         const affectedWorkspaceIds = new Set<string>();
 
         // 3. Process iCal Feeds sequentially (time-budgeted)
-        const TIME_BUDGET_MS = 45000; // Stop after 45s to leave room for Gmail
+        const TIME_BUDGET_MS = 25000; // Stop after 25s — cron-job.org has 30s timeout
 
         for (const feed of feeds) {
             // Check time budget before starting next feed
@@ -110,51 +110,60 @@ export async function GET(request: Request) {
             } // no-op
         }
 
-        // 4. Gmail ingestion runs unconditionally (owner-authorized, supersedes former Law 14)
+        // 4. Smart enrichment gate (Law 17): only run Gmail if unenriched bookings exist
+        const today = new Date().toISOString().split('T')[0];
+        const { count: unenrichedCount } = await supabase
+            .from('bookings')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_active', true)
+            .gte('check_in', `${today}T00:00:00.000Z`)
+            .or('guest_name.is.null,guest_name.eq.Reserved,guest_name.eq.Blocked');
 
-        // 5. Gmail Ingestion + Enrichment for ALL workspaces
         const connectionsSynced: string[] = [];
         const gmailFailedConnections: string[] = [];
+        let gmailTriggered = false;
 
-        const allWorkspaceIds = new Set(workspaceMap.values());
+        if ((unenrichedCount ?? 0) > 0) {
+            gmailTriggered = true;
+            console.log(`[CRON] ${unenrichedCount} unenriched future bookings found — running Gmail enrichment`);
 
-        for (const workspaceId of Array.from(allWorkspaceIds)) {
-            const { data: connections } = await supabase
-                .from('connections')
-                .select('id')
-                .eq('workspace_id', workspaceId)
-                .not('gmail_refresh_token', 'is', null);
+            const allWorkspaceIds = new Set(workspaceMap.values());
 
-            if (!connections || connections.length === 0) continue;
+            for (const workspaceId of Array.from(allWorkspaceIds)) {
+                const { data: connections } = await supabase
+                    .from('connections')
+                    .select('id')
+                    .eq('workspace_id', workspaceId)
+                    .not('gmail_refresh_token', 'is', null);
 
-            for (const connection of connections) {
-                const connStart = Date.now();
-                let success = false;
-                let errorMessage = null;
-                let scanCount = 0;
-                let enrichCount = 0;
-                let missingCount = 0;
+                if (!connections || connections.length === 0) continue;
 
-                try {
-                    // a) Process Messages
-                    const scanResults = await EmailProcessor.processMessages(connection.id);
-                    scanCount = scanResults.length;
+                for (const connection of connections) {
+                    const connStart = Date.now();
+                    let success = false;
+                    let errorMessage = null;
+                    let scanCount = 0;
+                    let enrichCount = 0;
+                    let missingCount = 0;
 
-                    // b) Enrich Bookings
-                    const enrichResults = await EmailProcessor.enrichBookings(connection.id);
-                    enrichCount = enrichResults.enriched;
-                    missingCount = enrichResults.missing;
+                    try {
+                        // a) Process Messages
+                        const scanResults = await EmailProcessor.processMessages(connection.id);
+                        scanCount = scanResults.length;
 
-                    success = true;
-                    connectionsSynced.push(connection.id);
-                } catch (e: any) {
-                    errorMessage = e.message || 'Unknown error during EmailProcessor';
-                    gmailFailedConnections.push(connection.id);
-                }
+                        // b) Enrich Bookings
+                        const enrichResults = await EmailProcessor.enrichBookings(connection.id);
+                        enrichCount = enrichResults.enriched;
+                        missingCount = enrichResults.missing;
 
-                // Log to gmail_sync_log only when there is something to report.
-                // Silent successful runs with no enrichments or missing bookings produce no record.
-                if (enrichCount > 0 || missingCount > 0 || success === false) {
+                        success = true;
+                        connectionsSynced.push(connection.id);
+                    } catch (e: any) {
+                        errorMessage = e.message || 'Unknown error during EmailProcessor';
+                        gmailFailedConnections.push(connection.id);
+                    }
+
+                    // Log every enrichment run (Law 17 — gate ensures we only run when needed)
                     await supabase.from('gmail_sync_log').insert({
                         workspace_id: workspaceId,
                         connection_id: connection.id,
@@ -167,6 +176,8 @@ export async function GET(request: Request) {
                     });
                 }
             }
+        } else {
+            console.log(`[CRON] All future bookings enriched — skipping Gmail`);
         }
 
         const runStatus = gmailFailedConnections.length > 0 && connectionsSynced.length > 0 ? "partial_ok" :
@@ -179,7 +190,7 @@ export async function GET(request: Request) {
             feeds_processed: feeds.length,
             feed_ids_processed: selectedFeedIds,
             total_processed_count: totalProcessedCount,
-            gmail_triggered: true,
+            gmail_triggered: gmailTriggered,
             connections_synced: connectionsSynced,
             gmail_failed_connections: gmailFailedConnections,
             duration_ms: Date.now() - start

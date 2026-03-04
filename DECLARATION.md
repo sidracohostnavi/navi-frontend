@@ -250,3 +250,6 @@ Airbnb Spark & Stay codes match `/^HM/i`. Lodgify codes match `/^B\d+/`. Other p
 
 ### H8 — Guest Count From iCal Is Unreliable
 When a booking arrives with `guest_count = 1` from iCal, treat it as unknown — not as confirmed single occupancy. Airbnb sends 1 as a default when the actual count is unavailable. Displaying "1 guest" when the count is genuinely unknown misrepresents the booking. The UI should show guest count only when it has been confirmed via email enrichment or manual entry. Until then, display no count or a "?" indicator.
+
+### Law 17 — Gmail Enrichment Gate Is Governed by Unenriched Booking Count
+Gmail enrichment runs only when at least one active future booking has a masked guest name (Reserved, Blocked, or null). When all future bookings are enriched, Gmail is skipped entirely. The gate is based on unenriched booking count — never on iCal change count. Do not change this gate without explicit owner authorization. Established 2026-03-04.
