@@ -59,11 +59,11 @@ export async function GET(request: NextRequest) {
 
             try {
                 // a) Scan Gmail for new reservation emails
-                const scanResults = await EmailProcessor.processMessages(conn.id);
+                const scanResults = await EmailProcessor.processMessages(conn.id, undefined, supabase);
                 scanCount = scanResults.length;
 
                 // b) Match reservation facts to unenriched bookings
-                const enrichResult = await EmailProcessor.enrichBookings(conn.id);
+                const enrichResult = await EmailProcessor.enrichBookings(conn.id, supabase);
                 enrichCount = enrichResult.enriched;
                 missingCount = enrichResult.missing;
 
