@@ -72,7 +72,7 @@ export async function GET(request: Request) {
         const affectedWorkspaceIds = new Set<string>();
 
         // 3. Process iCal Feeds sequentially (time-budgeted)
-        const TIME_BUDGET_MS = 25000; // Stop after 25s — cron-job.org has 30s timeout
+        const TIME_BUDGET_MS = 15000; // 15s for feeds, ~15s remaining for enrichment + Gmail within 30s cron-job.org limit
 
         for (const feed of feeds) {
             // Check time budget before starting next feed
