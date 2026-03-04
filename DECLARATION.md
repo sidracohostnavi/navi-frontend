@@ -71,6 +71,13 @@ When multiple iCal feeds (Lodgify, Spark & Stay, Sidra A/C) report the same stay
 ### Law 13 — Cleaning Blocks Are Not Guest Bookings
 Policy-enabled properties (currently: Farmhouse Estate) have Airbnb automatically insert cleaning blocks before check-in and after checkout. These appear in iCal feeds as "Airbnb (Not available)" events. They must be stored as bookings with a visual distinction but are never enriched, never sent to Review Inbox, and never matched against reservation facts. Do not attempt to enrich or resolve cleaning blocks. Non-policy properties do not generate these blocks.
 
+**Unenriched count clarification:** The following guest names appear as "unenriched" in SQL queries but are operational blocks that must never be enriched:
+- `P********** T***` — Lodgify Preparation Time buffers (1-day padding around bookings)
+- `Airbnb (Not available)` — Airbnb cleaning blocks on policy-enabled properties (Law 13)
+- `Closed Period`, `Not Available` — Owner-initiated blocks (H2)
+
+Only bookings with guest_name `Reserved` (Airbnb masked name) or similar platform placeholders are genuine unenriched guest bookings eligible for enrichment. When reporting enrichment statistics, distinguish real unenriched bookings from operational blocks.
+
 ### Law 14 — Enrichment Runs Every Cron Cycle
 Gmail enrichment runs on every cron cycle regardless of whether iCal found changes. This ensures newly arrived bookings are enriched promptly without waiting for a coincidental iCal change. Previously gated — owner-authorized removal on 2026-03-04.
 
