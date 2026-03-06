@@ -60,7 +60,7 @@ export class ICalProcessor {
         let eventCount = 0;
         let feedEventsFound = 0;
         let totalUpdated = 0;
-        let syncError: string | null = null;
+        let syncError: string | undefined = undefined;
         let events: any = {};
 
         try {
