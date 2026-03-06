@@ -1,0 +1,550 @@
+.
+├── .backups/
+│   └── phase3/
+│       ├── CalendarClient.tsx
+│       ├── layout.tsx
+│       ├── page.tsx
+│       ├── roleConfig.ts
+│       └── route.ts
+├── app/
+│   ├── agents/
+│   │   └── page.tsx
+│   ├── api/
+│   │   ├── auth/
+│   │   │   ├── gmail/
+│   │   │   │   ├── callback/
+│   │   │   │   │   └── route.ts
+│   │   │   │   └── url/
+│   │   │   │       └── route.ts
+│   │   │   ├── login/
+│   │   │   │   └── route.ts
+│   │   │   ├── logout/
+│   │   │   │   └── route.ts
+│   │   │   └── signup/
+│   │   │       └── route.ts
+│   │   ├── cohost/
+│   │   │   ├── approve/
+│   │   │   │   └── route.ts
+│   │   │   ├── calendar/
+│   │   │   │   └── route.ts
+│   │   │   ├── connections/
+│   │   │   │   ├── [id]/
+│   │   │   │   │   ├── enrich/
+│   │   │   │   │   │   └── route.ts
+│   │   │   │   │   ├── gmail/
+│   │   │   │   │   │   ├── labels/
+│   │   │   │   │   │   │   └── route.ts
+│   │   │   │   │   │   ├── scan/
+│   │   │   │   │   │   │   └── route.ts
+│   │   │   │   │   │   └── start/
+│   │   │   │   │   │       └── route.ts
+│   │   │   │   │   ├── health/
+│   │   │   │   │   │   └── route.ts
+│   │   │   │   │   └── sync/
+│   │   │   │   │       └── route.ts
+│   │   │   │   └── gmail/
+│   │   │   │       ├── callback/
+│   │   │   │       │   └── route.ts
+│   │   │   │       ├── process/
+│   │   │   │       │   └── route.ts
+│   │   │   │       └── test/
+│   │   │   │           └── route.ts
+│   │   │   ├── debug/
+│   │   │   │   └── gmail/
+│   │   │   │       └── route.ts
+│   │   │   ├── escalate/
+│   │   │   │   └── route.ts
+│   │   │   ├── generate-draft/
+│   │   │   │   └── route.ts
+│   │   │   ├── ical/
+│   │   │   │   ├── feed/
+│   │   │   │   │   └── disable/
+│   │   │   │   │       └── route.ts
+│   │   │   │   ├── reset/
+│   │   │   │   │   └── route.ts
+│   │   │   │   └── sync/
+│   │   │   │       └── route.ts
+│   │   │   ├── mark-sent/
+│   │   │   │   └── route.ts
+│   │   │   ├── properties/
+│   │   │   │   └── import/
+│   │   │   │       └── route.ts
+│   │   │   ├── refresh/
+│   │   │   │   └── route.ts
+│   │   │   ├── reprocess/
+│   │   │   │   └── route.ts
+│   │   │   ├── review/
+│   │   │   │   ├── [id]/
+│   │   │   │   │   └── resolve/
+│   │   │   │   │       └── route.ts
+│   │   │   │   └── items/
+│   │   │   │       └── route.ts
+│   │   │   ├── send/
+│   │   │   │   └── route.ts
+│   │   │   ├── settings/
+│   │   │   │   └── pms-account/
+│   │   │   │       └── route.ts
+│   │   │   └── users/
+│   │   │       ├── [userId]/
+│   │   │       │   └── properties/
+│   │   │       │       └── route.ts
+│   │   │       ├── accept/
+│   │   │       │   └── route.ts
+│   │   │       ├── invite/
+│   │   │       │   └── route.ts
+│   │   │       ├── list/
+│   │   │       │   └── route.ts
+│   │   │       ├── revoke/
+│   │   │       │   └── route.ts
+│   │   │       └── role/
+│   │   │           └── route.ts
+│   │   ├── cron/
+│   │   │   ├── enrichment/
+│   │   │   │   └── route.ts
+│   │   │   └── refresh/
+│   │   │       └── route.ts
+│   │   ├── debug-env/
+│   │   │   └── route.ts
+│   │   ├── dev/
+│   │   │   └── login-as/
+│   │   │       └── route.ts
+│   │   ├── orakl/
+│   │   │   └── chat/
+│   │   │       └── route.ts
+│   │   ├── stripe/
+│   │   │   ├── checkout/
+│   │   │   │   └── route.ts
+│   │   │   └── webhook/
+│   │   │       └── route.ts
+│   │   ├── support/
+│   │   │   ├── clear-workspace/
+│   │   │   │   └── route.ts
+│   │   │   └── switch-workspace/
+│   │   │       └── route.ts
+│   │   └── webhooks/
+│   │       ├── guesty/
+│   │       │   └── route.ts
+│   │       ├── hospitable/
+│   │       │   └── route.ts
+│   │       └── hostaway/
+│   │           └── route.ts
+│   ├── auth/
+│   │   ├── callback/
+│   │   │   └── route.ts
+│   │   ├── login/
+│   │   │   └── page.tsx
+│   │   └── signup/
+│   │       └── page.tsx
+│   ├── cohost/
+│   │   ├── calendar/
+│   │   │   ├── CalendarClient.tsx
+│   │   │   └── page.tsx
+│   │   ├── dailyops/
+│   │   │   ├── components/
+│   │   │   │   ├── BookingModal.tsx
+│   │   │   │   ├── PropertySelector.tsx
+│   │   │   │   ├── ShareModal.tsx
+│   │   │   │   ├── SummaryBar.tsx
+│   │   │   │   ├── TaskCard.tsx
+│   │   │   │   └── TaskSection.tsx
+│   │   │   ├── actions.ts
+│   │   │   └── page.tsx
+│   │   ├── dashboard/
+│   │   │   ├── layout.tsx
+│   │   │   └── page.tsx
+│   │   ├── invite/
+│   │   │   └── page.tsx
+│   │   ├── login/
+│   │   │   └── page.tsx
+│   │   ├── messaging/
+│   │   │   ├── inbox/
+│   │   │   │   ├── InboxClient.tsx
+│   │   │   │   ├── InboxFilters.tsx
+│   │   │   │   └── page.tsx
+│   │   │   ├── messages/
+│   │   │   │   └── [id]/
+│   │   │   │       ├── MessageActions.tsx
+│   │   │   │       └── page.tsx
+│   │   │   └── layout.tsx
+│   │   ├── properties/
+│   │   │   ├── [id]/
+│   │   │   │   └── page.tsx
+│   │   │   ├── new/
+│   │   │   │   └── page.tsx
+│   │   │   ├── constants.ts
+│   │   │   └── page.tsx
+│   │   ├── review/
+│   │   │   └── page.tsx
+│   │   ├── settings/
+│   │   │   ├── (landing)/
+│   │   │   │   └── page.tsx
+│   │   │   └── (workspace)/
+│   │   │       ├── billing/
+│   │   │       │   └── page.tsx
+│   │   │       ├── calendar/
+│   │   │       │   └── page.tsx
+│   │   │       ├── connections/
+│   │   │       │   └── page.tsx
+│   │   │       ├── notifications/
+│   │   │       │   └── page.tsx
+│   │   │       ├── profile/
+│   │   │       │   └── page.tsx
+│   │   │       ├── properties/
+│   │   │       │   └── page.tsx
+│   │   │       ├── support/
+│   │   │       │   └── page.tsx
+│   │   │       ├── team/
+│   │   │       │   ├── ManagePropertiesModal.tsx
+│   │   │       │   └── page.tsx
+│   │   │       ├── layout.tsx
+│   │   │       ├── PmsAccountForm.tsx
+│   │   │       └── SyncButton.tsx
+│   │   ├── signup/
+│   │   │   └── page.tsx
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   ├── constellation/
+│   │   └── page.tsx
+│   ├── dashboard/
+│   │   ├── actions.ts
+│   │   ├── AppTile.tsx
+│   │   └── page.tsx
+│   ├── entry/
+│   │   └── page.tsx
+│   ├── momassist/
+│   │   ├── layout.tsx
+│   │   └── page.tsx
+│   ├── orakl/
+│   │   ├── login/
+│   │   │   └── page.tsx
+│   │   ├── layout.tsx
+│   │   ├── OraklDashboard.tsx
+│   │   └── page.tsx
+│   ├── pulse/
+│   │   └── page.tsx
+│   ├── support/
+│   │   └── switch/
+│   │       ├── page.tsx
+│   │       └── SwitchForm.tsx
+│   ├── favicon.ico
+│   ├── globals.css
+│   ├── layout.tsx
+│   └── page.tsx
+├── components/
+│   ├── Footer.tsx
+│   └── Navbar.tsx
+├── docs/
+│   ├── audits/
+│   │   ├── 2026-01-24_backfill_report.md
+│   │   └── 2026-01-24_connections_workspace_audit.md
+│   ├── auth/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── AUTH_CONTRACT.md
+│   │   ├── RESTORE_PLAN.md
+│   │   ├── ROADMAP.md
+│   │   └── system_snapshot.md
+│   ├── calendar/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── CALENDAR_CONTRACT.md
+│   │   ├── RESTORE_PLAN.md
+│   │   ├── ROADMAP.md
+│   │   └── system_snapshot.md
+│   ├── cohost/
+│   │   └── ENRICHMENT_CONTRACT.md
+│   ├── connections/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── CONNECTIONS_CONTRACT.md
+│   │   ├── LOGBOOK.md
+│   │   ├── RESTORE_PLAN.md
+│   │   ├── ROADMAP.md
+│   │   └── system_snapshot.md
+│   ├── inbox/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── INBOX_CONTRACT.md
+│   │   ├── RESTORE_PLAN.md
+│   │   ├── ROADMAP.md
+│   │   └── system_snapshot.md
+│   ├── properties/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── PROPERTIES_CONTRACT.md
+│   │   ├── RESTORE_PLAN.md
+│   │   ├── ROADMAP.md
+│   │   └── system_snapshot.md
+│   ├── review/
+│   │   ├── ARCHITECTURE.md
+│   │   ├── RESTORE_PLAN.md
+│   │   ├── REVIEW_CONTRACT.md
+│   │   ├── ROADMAP.md
+│   │   └── system_snapshot.md
+│   └── connections_docs.zip
+├── lib/
+│   ├── apps/
+│   │   ├── checkAppAccess.ts
+│   │   └── getWorkspaceApps.ts
+│   ├── components/
+│   │   ├── CohostHeader.tsx
+│   │   └── ProtectedRoute.tsx
+│   ├── connectors/
+│   │   ├── guesty/
+│   │   │   └── index.ts
+│   │   ├── hospitable/
+│   │   │   └── index.ts
+│   │   ├── hostaway/
+│   │   │   └── index.ts
+│   │   ├── index.ts
+│   │   └── types.ts
+│   ├── contexts/
+│   │   └── AuthContext.tsx
+│   ├── hooks/
+│   │   └── useSessionRefresh.ts
+│   ├── memory/
+│   │   ├── examples/
+│   │   │   └── memoryUsage.tsx
+│   │   └── getMemories.ts
+│   ├── parsers/
+│   │   └── airbnb-email.ts
+│   ├── roles/
+│   │   ├── requireRole.ts
+│   │   └── roleConfig.ts
+│   ├── services/
+│   │   ├── email-classifier.ts
+│   │   ├── email-processor.ts
+│   │   ├── gmail-service.ts
+│   │   └── ical-processor.ts
+│   ├── supabase/
+│   │   ├── hooks/
+│   │   │   ├── useBookings.ts
+│   │   │   └── useReviewCount.ts
+│   │   ├── auth.ts
+│   │   ├── authServer.ts
+│   │   ├── client.ts
+│   │   ├── cohostServer.ts
+│   │   ├── cohostTypes.ts
+│   │   ├── server.ts
+│   │   └── types.ts
+│   ├── utils/
+│   │   ├── api-errors.ts
+│   │   ├── auto-pick-label.ts
+│   │   ├── db-lock.ts
+│   │   ├── google.ts
+│   │   ├── platform-colors.ts
+│   │   └── sync-lock.ts
+│   ├── workspaces/
+│   │   └── ensureWorkspace.ts
+│   ├── supabaseOraklClient.ts
+│   ├── supabaseOraklServer.ts
+│   └── utils.ts
+├── public/
+│   ├── mascots/
+│   │   ├── cohost.png
+│   │   ├── momassist.png
+│   │   └── orakl.png
+│   ├── file.svg
+│   ├── globe.svg
+│   ├── next.svg
+│   ├── vercel.svg
+│   └── window.svg
+├── scripts/
+│   ├── admin/
+│   │   ├── fix_identity_constraints.sql
+│   │   ├── rollback_team_schema.sql
+│   │   └── verify_team_schema.sql
+│   ├── migrations/
+│   │   ├── 000_init_workspaces.sql
+│   │   ├── 001_create_workspace_apps.sql
+│   │   ├── 002_create_memories_table.sql
+│   │   ├── 003_create_cohost_schema.sql
+│   │   ├── 004_create_ical_feeds.sql
+│   │   ├── 005_update_bookings_schema.sql
+│   │   ├── 006_properties_wizard_schema.sql
+│   │   ├── 007_emergency_schema_reset.sql
+│   │   ├── 008_add_ai_notes.sql
+│   │   ├── 009_add_street_address.sql
+│   │   ├── 010_fix_workspace_policies.sql
+│   │   ├── 011_add_slug_to_workspaces.sql
+│   │   ├── 012_fix_recursion.sql
+│   │   ├── 013_fix_workspace_insert_policy.sql
+│   │   ├── 014_create_storage_bucket.sql
+│   │   ├── 015_fix_rls_policies_globally.sql
+│   │   ├── 016_add_last_synced_at_to_bookings.sql
+│   │   ├── 017_add_booking_provenance.sql
+│   │   ├── 018_fix_booking_cascade.sql
+│   │   ├── 019_add_ical_debug_fields.sql
+│   │   ├── 020_create_connections.sql
+│   │   ├── 021_update_connections_platforms.sql
+│   │   ├── 022_add_connection_name.sql
+│   │   ├── 023_add_connection_labels.sql
+│   │   ├── 024_enrichment_schema.sql
+│   │   ├── 025_add_ical_name.sql
+│   │   ├── 026_enrichment_review_items.sql
+│   │   ├── 027_booking_needs_review.sql
+│   │   ├── 028_connection_validation.sql
+│   │   ├── 029_add_connected_at.sql
+│   │   ├── 030_ical_debug_columns.sql
+│   │   ├── 031_add_booking_count.sql
+│   │   ├── 032_email_processing_schema.sql
+│   │   ├── 033_add_booking_enrichment_fields.sql
+│   │   ├── 034_gmail_oauth_tokens.sql
+│   │   ├── 035_gmail_status_columns.sql
+│   │   ├── 036_booking_upsert_constraint.sql
+│   │   ├── 036_restore_properties_policy.sql
+│   │   ├── 037_add_gmail_label_config.sql
+│   │   ├── 038_create_gmail_ingestion_tables.sql
+│   │   ├── 039_add_guest_count_to_bookings.sql
+│   │   ├── 040_add_connections_workspace_id.sql
+│   │   ├── 041_secure_connections_rls.sql
+│   │   ├── 042_connection_hardening.sql
+│   │   ├── 042_update_enrichment_logs_constraints.sql
+│   │   ├── 043_support_audit_logs.sql
+│   │   ├── 044_manual_booking_resolution.sql
+│   │   ├── 045_connection_oauth_logging.sql
+│   │   ├── 046_workspace_invites_permissions.sql
+│   │   ├── 047_reload_postgrest_schema.sql
+│   │   ├── 047_workspace_owner_uniqueness.sql
+│   │   ├── 050_team_invites_schema.sql
+│   │   ├── 051_add_role_to_invites.sql
+│   │   ├── 052_add_user_properties.sql
+│   │   ├── 053_add_cleaning_buffers.sql
+│   │   └── fix_gmail_schema_consolidated.sql
+│   ├── add_connection_color.js
+│   ├── analyze_schema.ts
+│   ├── apply_migration.ts
+│   ├── audit_identity_schema.ts
+│   ├── backfill_connections_workspace.js
+│   ├── backfill-reservation-facts.ts
+│   ├── check_audit_logs.js
+│   ├── check_feed_schema.js
+│   ├── check_logs.ts
+│   ├── check_mappings.js
+│   ├── check_properties.ts
+│   ├── check_sidra_reviews.js
+│   ├── cleanup_duplicates.ts
+│   ├── cleanup_lodgify_duplicates.js
+│   ├── debug_calendar.ts
+│   ├── debug_email.ts
+│   ├── debug_gmail_error.ts
+│   ├── debug_gmail_fetch.ts
+│   ├── debug_user_role.ts
+│   ├── diagnose-parsing.ts
+│   ├── find_duplicates.js
+│   ├── fix_cleaner_guest_count.ts
+│   ├── fix_cleaner_permissions.ts
+│   ├── fix_connection_label.ts
+│   ├── fix_constraints.sql
+│   ├── fix_workspace_preference.ts
+│   ├── get_magic_link.ts
+│   ├── inspect_auth_users.ts
+│   ├── inspect_dates_deep.js
+│   ├── inspect_dates.js
+│   ├── inspect_invites.ts
+│   ├── inspect_schema.js
+│   ├── preflight_phase3.js
+│   ├── reprocess_enrichment.ts
+│   ├── run_migration_018.js
+│   ├── run_migration_019.js
+│   ├── run_migration_020.js
+│   ├── run_migration_021.js
+│   ├── run_migration_022.js
+│   ├── run_migration_023.js
+│   ├── run_migration_024.js
+│   ├── run_migration_025.js
+│   ├── run_migration_026.js
+│   ├── run_migration_027.js
+│   ├── run_migration_028.js
+│   ├── run_migration_029.js
+│   ├── run_migration_030.js
+│   ├── run_migration_038.js
+│   ├── run_migration_039.js
+│   ├── run_migration_043.js
+│   ├── run_migration_045.js
+│   ├── run_migration_052.js
+│   ├── run_migration_053.js
+│   ├── run_reprocess.ts
+│   ├── run_sql_direct.js
+│   ├── run-canonical-backfill.ts
+│   ├── run-sync-manual.ts
+│   ├── simple_link.ts
+│   ├── sync-ical-dates.ts
+│   ├── test_email_classification.ts
+│   ├── test_gmail_api.ts
+│   ├── test_health.ts
+│   ├── test_invite_simulation.ts
+│   ├── test_parsing.ts
+│   ├── update_test_color.js
+│   ├── verify_connection.ts
+│   ├── verify_gmail_columns.ts
+│   ├── verify_label_id.ts
+│   ├── verify_migration_040.js
+│   ├── verify_table.js
+│   ├── verify_user_data.ts
+│   ├── verify-connection.ts
+│   ├── verify-ingestion-prep.js
+│   └── verify-upsert.ts
+├── supabase/
+│   └── migrations/
+│       └── 20260225000000_create_gmail_sync_log.sql
+├── .DS_Store
+├── .env.example
+├── .env.local
+├── .gitignore
+├── analyze_dates.ts
+├── analyze_feeds.ts
+├── apply_migration.js
+├── check_cottage.ts
+├── check_enrich_2.ts
+├── check_enrich_3.ts
+├── check_enrich_4.ts
+├── check_enrich.ts
+├── check-null.js
+├── check-null.ts
+├── classification_report.json
+├── diagnose_pt.ts
+├── eslint.config.mjs
+├── fix_calendar.js
+├── fix_craig.js
+├── force_sync.js
+├── generate_tree.js
+├── get_schema.js
+├── handover.md
+├── insert_dummy.js
+├── investigate6.js
+├── middleware.off.ts
+├── next-env.d.ts
+├── next.config.ts
+├── package-lock.json
+├── package.json
+├── patch_email_processor.js
+├── postcss.config.mjs
+├── prove_craig.js
+├── proxy.ts
+├── query_db.ts
+├── query_farmhouse.js
+├── README.md
+├── revert.js
+├── run_reprocess.ts
+├── test_api_closed_period.ts
+├── test_api_diagnostic.ts
+├── test_api_enrichment.ts
+├── test_api_fetch.js
+├── test_api_fetch2.js
+├── test_api_holds.ts
+├── test_api_payload.ts
+├── test_api.js
+├── test_body_extraction.ts
+├── test_calendar_logic.ts
+├── test_coverage.js
+├── test_cron.ts
+├── test_db_enrichment.ts
+├── test_db.js
+├── test_db2.js
+├── test_feeds.ts
+├── test_ical.js
+├── test_import.mjs
+├── test_parse_behavior.ts
+├── test_parse.ts
+├── test_validation.ts
+├── test_worker.ts
+├── trigger_sync.ts
+├── tsconfig.json
+├── tsconfig.tsbuildinfo
+└── vercel.json

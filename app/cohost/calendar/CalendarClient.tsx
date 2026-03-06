@@ -55,6 +55,11 @@ type Booking = {
   manuallyResolvedAt?: string;
   // Server-side enrichment: connection that matched this booking via reservation_facts
   matchedConnectionId?: string;
+  // Enrichment fields (new system)
+  enrichedGuestName?: string;
+  enrichedGuestCount?: number;
+  enrichedConnectionId?: string;
+  enrichedAt?: string;
   type?: 'booking' | 'cleaning';
 };
 
@@ -421,6 +426,10 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
       createdAt: b.created_at,
       // Server-side enrichment
       matchedConnectionId: b.matched_connection_id,
+      enrichedGuestName: b.enriched_guest_name,
+      enrichedGuestCount: b.enriched_guest_count,
+      enrichedConnectionId: b.enriched_connection_id,
+      enrichedAt: b.enriched_at,
       // Manual resolution fields
       manualConnectionId: b.manual_connection_id,
       manualGuestName: b.manual_guest_name,
@@ -897,10 +906,8 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                     }
                   }
 
-                  // === DISPLAY RULES ===
-                  // API returns pre-enriched guest_name + guest_count.
-                  // Unenriched: "Reservation", booking guest count, grey, no label
-                  // Enriched:   booking guest name (from API), connection color+name
+                  // === DISPLAY LOGIC ===
+                  // Priority: Manual Override > Enriched (new system) > Legacy enrichment > Raw iCal
                   let displayGuestName = 'Reservation';
                   let displayGuestCount = booking.guestCount;
 
@@ -911,12 +918,22 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                       resolvedConnectionColor = getConnectionColor(booking.manualConnectionId);
                       labelText = connectionIdNameMap.get(booking.manualConnectionId) || '';
                     }
+                  } else if (booking.enrichedGuestName) {
+                    // New enrichment system (structural separation)
+                    displayGuestName = booking.enrichedGuestName;
+                    displayGuestCount = booking.enrichedGuestCount ?? displayGuestCount;
+                    if (booking.enrichedConnectionId) {
+                      resolvedConnectionColor = getConnectionColor(booking.enrichedConnectionId);
+                      labelText = connectionIdNameMap.get(booking.enrichedConnectionId) || '';
+                    }
                   } else if (booking.matchedConnectionId) {
+                    // Legacy enrichment (from_fact_id in raw_data) — backwards compatibility
                     displayGuestName = booking.guestName || 'Reservation';
                     displayGuestCount = booking.guestCount;
                     resolvedConnectionColor = getConnectionColor(booking.matchedConnectionId);
                     labelText = connectionIdNameMap.get(booking.matchedConnectionId) || '';
-                  } else if (booking.guestName && !['Guest', 'Reserved', 'Blocked', 'Not Available'].includes(booking.guestName)) {
+                  } else if (booking.guestName && !['Guest', 'Reserved', 'Blocked', 'Not Available', 'Airbnb (Not available)', 'Closed Period', 'Not available'].includes(booking.guestName)) {
+                    // iCal provided a real name (e.g., Lodgify includes names)
                     displayGuestName = booking.guestName;
                     displayGuestCount = booking.guestCount;
                   }

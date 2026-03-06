@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
             .select('*', { count: 'exact', head: true })
             .eq('is_active', true)
             .gte('check_in', `${today}T00:00:00.000Z`)
-            .or('guest_name.is.null,guest_name.eq.Reserved,guest_name.eq.Blocked');
+            .is('enriched_guest_name', null);
 
         if ((unenrichedCount ?? 0) === 0) {
             console.log('[Cron:Enrichment] All future bookings enriched — skipping');

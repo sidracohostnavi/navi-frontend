@@ -1,0 +1,15 @@
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html;charset=ISO-8859-1"/>
+<title>Error 400 Bad Request</title>
+</head>
+<body><h2>HTTP ERROR 400 Bad Request</h2>
+<table>
+<tr><th>URI:</th><td>/calendar/ical/1358185447520675079.ics</td></tr>
+<tr><th>STATUS:</th><td>400</td></tr>
+<tr><th>MESSAGE:</th><td>Bad Request</td></tr>
+<tr><th>SERVLET:</th><td>jersey</td></tr>
+</table>
+
+</body>
+</html>

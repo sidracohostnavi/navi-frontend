@@ -75,6 +75,10 @@ export async function GET(request: NextRequest) {
       'manual_guest_count',
       'manual_notes',
       'manually_resolved_at',
+      'enriched_guest_name',
+      'enriched_guest_count',
+      'enriched_connection_id',
+      'enriched_at',
       'raw_data'
     ].join(','))
     .eq('is_active', true)

@@ -374,6 +374,23 @@ export class EmailProcessor {
                 continue;
             }
 
+            // DUPLICATE PREVENTION: Check if fact with same confirmation code already exists
+            if (fact.confirmation_code && fact.confirmation_code.length >= 6) {
+                const { data: existingCodeFact } = await supabase
+                    .from('reservation_facts')
+                    .select('id')
+                    .eq('connection_id', connectionId)
+                    .eq('confirmation_code', fact.confirmation_code)
+                    .limit(1)
+                    .maybeSingle();
+
+                if (existingCodeFact) {
+                    console.log(`[EmailProcessor] Fact with code ${fact.confirmation_code} already exists, skipping`);
+                    await supabase.from('gmail_messages').update({ processed_at: new Date().toISOString() }).eq('gmail_message_id', sourceGmailId);
+                    continue;
+                }
+            }
+
             const { error: factError } = await supabase
                 .from('reservation_facts')
                 .upsert({
@@ -496,34 +513,21 @@ export class EmailProcessor {
         return false;
     }
 
+    /**
+     * Match reservation facts to unenriched bookings and write enrichment data.
+     * 
+     * CRITICAL RULES:
+     * - Matches by CONFIRMATION CODE ONLY (code in fact matches code in booking's raw_data.description)
+     * - Writes ONLY to enrichment columns: enriched_guest_name, enriched_guest_count, enriched_connection_id, enriched_at
+     * - NEVER writes to: guest_name, check_in, check_out, property_id
+     * - Cleaning blocks (no confirmation code) are automatically excluded
+     */
     static async enrichBookings(connectionId: string, supabaseClient?: any) {
         const supabase = supabaseClient || await createClient();
-        console.log(`[EmailProcessor] ========== ENRICH CALENDAR BOOKINGS ==========`);
+        console.log(`[EmailProcessor] ========== ENRICH BOOKINGS ==========`);
         console.log(`[EmailProcessor] Connection ID: ${connectionId}`);
 
-        // 1. Fetch Reservation Facts
-        const { data: facts } = await supabase
-            .from('reservation_facts')
-            .select('*')
-            .eq('connection_id', connectionId)
-            .order('created_at', { ascending: false })
-            .limit(100); // Process recent 100
-
-        if (!facts || facts.length === 0) {
-            console.log(`[EmailProcessor] No reservation facts found.`);
-            return { enriched: 0, missing: 0 };
-        }
-
-        // 1.5. Fetch workspace_id from connection for review item creation
-        const { data: connection } = await supabase
-            .from('connections')
-            .select('workspace_id')
-            .eq('id', connectionId) // Fixed connectionId reference
-            .single();
-
-        const workspaceId = connection?.workspace_id;
-
-        // 2. Resolve Properties
+        // 1. Get properties linked to this connection
         const { data: connProps } = await supabase
             .from('connection_properties')
             .select('property_id')
@@ -531,201 +535,94 @@ export class EmailProcessor {
 
         const propertyIds = connProps ? connProps.map((cp: { property_id: string }) => cp.property_id) : [];
         if (propertyIds.length === 0) {
-            console.warn(`[EmailProcessor] No linked properties.`);
+            console.log(`[EmailProcessor] No linked properties for connection ${connectionId}`);
             return { enriched: 0, missing: 0 };
         }
 
-        // 3. Fetch Candidate Bookings (Broad Range)
-        const minDate = new Date(); minDate.setDate(minDate.getDate() - 60); // Last 2 months
-        const maxDate = new Date(); maxDate.setDate(maxDate.getDate() + 365); // Next year
+        // 2. Fetch unenriched bookings (enriched_guest_name IS NULL)
+        const minDate = new Date();
+        minDate.setDate(minDate.getDate() - 14); // 2 weeks back
+        const maxDate = new Date();
+        maxDate.setDate(maxDate.getDate() + 365); // 1 year forward
 
         const { data: bookings } = await supabase
             .from('bookings')
-            .select('*')
+            .select('id, property_id, check_in, check_out, guest_name, raw_data')
             .in('property_id', propertyIds)
+            .eq('is_active', true)
             .gte('check_in', minDate.toISOString())
-            .lte('check_in', maxDate.toISOString());
+            .lte('check_in', maxDate.toISOString())
+            .is('enriched_guest_name', null);
 
-        // Even if no bookings found, we still want to check for missing bookings based on facts
         const candidateBookings = bookings || [];
+        console.log(`[EmailProcessor] Found ${candidateBookings.length} unenriched bookings`);
 
-        console.log(`[EmailProcessor] Candidates: Facts=${facts.length}, Bookings=${candidateBookings.length}`);
+        if (candidateBookings.length === 0) {
+            return { enriched: 0, missing: 0 };
+        }
+
+        // 3. Fetch reservation facts for this connection
+        const { data: facts } = await supabase
+            .from('reservation_facts')
+            .select('id, confirmation_code, guest_name, guest_count, check_in, check_out')
+            .eq('connection_id', connectionId)
+            .not('confirmation_code', 'is', null)
+            .neq('confirmation_code', '')
+            .order('created_at', { ascending: false })
+            .limit(200);
+
+        if (!facts || facts.length === 0) {
+            console.log(`[EmailProcessor] No facts with confirmation codes for connection ${connectionId}`);
+            return { enriched: 0, missing: 0 };
+        }
+
+        console.log(`[EmailProcessor] Found ${facts.length} facts with confirmation codes`);
 
         let enrichedCount = 0;
-        let missingCount = 0;
+        const processedBookingIds = new Set<string>();
 
-        // 4. Match and Update
+        // 4. Match facts to bookings by confirmation code
         for (const fact of facts) {
-            if (!fact.check_in || !fact.check_out) continue;
+            // Skip facts with generic/placeholder names
+            if (!fact.guest_name) continue;
+            const lowerName = fact.guest_name.toLowerCase();
+            if (['guest', 'reserved', 'blocked', 'not available'].includes(lowerName)) continue;
 
-            let targetBooking = null;
-            let matchReason = '';
+            const code = fact.confirmation_code;
+            if (!code || code.length < 6) continue;
 
-            // A. Strict Confirmation Code Match
-            if (fact.confirmation_code && fact.confirmation_code.length >= 6) {
-                targetBooking = candidateBookings.find((b: any) =>
-                    b.reservation_code === fact.confirmation_code ||
-                    (b.raw_data && JSON.stringify(b.raw_data).includes(fact.confirmation_code)) ||
-                    (b.guest_name && b.guest_name.includes(fact.confirmation_code))
-                );
-                if (targetBooking) matchReason = 'Confirmation Code';
-            }
+            // Find booking where raw_data contains this confirmation code
+            const matchingBooking = candidateBookings.find((b: any) => {
+                if (processedBookingIds.has(b.id)) return false;
+                if (!b.raw_data) return false;
+                const rawStr = JSON.stringify(b.raw_data);
+                return rawStr.includes(code);
+            });
 
-            // B. Fallback: Exact Date Match (Strict)
-            if (!targetBooking) {
-                const factIn = fact.check_in;
-                const factOut = fact.check_out;
-
-                const dateMatches = candidateBookings.filter((b: any) => {
-                    const bIn = new Date(b.check_in).toISOString().split('T')[0];
-                    const bOut = new Date(b.check_out).toISOString().split('T')[0];
-                    return bIn === factIn && bOut === factOut;
-                });
-
-                const eligible_unenriched_matches = dateMatches.filter((b: any) =>
-                    EmailProcessor.isMaskedGuestName(b.guest_name)
-                );
-
-                if (eligible_unenriched_matches.length === 1) {
-                    targetBooking = eligible_unenriched_matches[0];
-                    matchReason = 'Unique Date (Eligible)';
-                } else if (eligible_unenriched_matches.length > 1) {
-                    // AMBIGUITY: Multiple unenriched bookings need this fact
-                    targetBooking = null;
-                    matchReason = 'AMBIGUITY_TRIPPED';
-                } else if (eligible_unenriched_matches.length === 0) {
-                    // No eligible targets (all enriched, or none existed)
-                    targetBooking = null;
-                }
-            }
-
-            if (targetBooking) {
-                // =================================================================
-                // CRITICAL RULE: iCal is the sole source of truth for dates
-                // ALWAYS sync dates from booking to fact when matched (before any continue)
-                // =================================================================
-                const bookingCheckIn = new Date(targetBooking.check_in).toISOString().split('T')[0];
-                const bookingCheckOut = new Date(targetBooking.check_out).toISOString().split('T')[0];
-
-                // Only update dates if they differ (avoid unnecessary writes)
-                if (fact.check_in !== bookingCheckIn || fact.check_out !== bookingCheckOut) {
-                    await supabase
-                        .from('reservation_facts')
-                        .update({
-                            check_in: bookingCheckIn,
-                            check_out: bookingCheckOut
-                        })
-                        .eq('id', fact.id);
-                    // console.log(`[EmailProcessor] ✅ Synced iCal dates to fact ${fact.id}`);
-                }
-                // =================================================================
-
-                // CRITICAL SAFETY RULE:
-                // - Email enrichment ONLY updates guest metadata (name, count)
-                // - NEVER modifies property_id (comes from iCal feed only)
-                // - NEVER creates new bookings (UPDATE only, no INSERT/UPSERT)
-                // - Property assignment is determined exclusively by iCal sync
-
-                // SAFETY GATE: Only overwrite if current name is missing or masked
-                const currentName = targetBooking.guest_name;
-
-                // Prevent "Guest" from overwriting real name
-                const isFactFallbackName = fact.guest_name === 'Guest' || fact.guest_name === 'Reserved';
-
-                if (currentName && !EmailProcessor.isMaskedGuestName(currentName)) {
-                    // Valid name exists. Do not overwrite.
-                    continue;
-                }
-
-                // If fact name is just "Guest", NEVER use it to enrich unless we really have nothing. 
-                // Actually, if we have nothing, "Guest" is useless enrichment.
-                if (isFactFallbackName) {
-                    // console.log(`[EmailProcessor] Skipping enrichment - Fact has generic name "${fact.guest_name}"`);
-                    continue;
-                }
-
-                if (currentName === fact.guest_name) {
-                    continue; // No change
-                }
-
-                // Enrich (Re-hydration)
-                const firstName = fact.guest_name ? fact.guest_name.split(' ')[0] : null;
-                const lastInitial = fact.guest_name && fact.guest_name.split(' ').length > 1 ? fact.guest_name.split(' ').pop()?.replace('.', '') : '';
-                const displayName = `${firstName} ${lastInitial ? lastInitial + '.' : ''}`;
-
-                // Update booking
+            if (matchingBooking) {
+                // Write to enrichment columns ONLY
                 const { error: updateError } = await supabase
                     .from('bookings')
                     .update({
-                        guest_name: displayName,
-                        guest_count: fact.guest_count,
-                        guest_first_name: firstName,
-                        guest_last_initial: lastInitial,
-                        raw_data: {
-                            ...targetBooking.raw_data,
-                            enriched_manually: true,
-                            from_fact_id: fact.id,
-                            enrichment_reason: matchReason
-                        }
+                        enriched_guest_name: fact.guest_name,
+                        enriched_guest_count: fact.guest_count || null,
+                        enriched_connection_id: connectionId,
+                        enriched_at: new Date().toISOString()
                     })
-                    .eq('id', targetBooking.id);
+                    .eq('id', matchingBooking.id);
 
                 if (!updateError) {
                     enrichedCount++;
-                    // console.log(`[EmailProcessor] Enriched ${targetBooking.id} -> ${displayName} (${matchReason})`);
-                }
-            } else {
-                // NO MATCH FOUND - Check if missing
-                // Only create review item if we have strong signal (Confirmation Code)
-                if (fact.confirmation_code && fact.check_in && fact.guest_name) {
-
-                    // Check if already in review items
-                    const { data: existingReview } = await supabase
-                        .from('enrichment_review_items')
-                        .select('id')
-                        .eq('connection_id', connectionId)
-                        .eq('extracted_data->>confirmation_code', fact.confirmation_code)
-                        .maybeSingle();
-
-                    if (!existingReview && workspaceId) {
-                        console.warn(`[EmailProcessor] ⚠️ Booking Missing from Calendar: ${fact.guest_name} (${fact.check_in}) code=${fact.confirmation_code}`);
-
-                        let payloadData: any = { ...fact };
-
-                        // Inject ambiguity context if tripped
-                        if (matchReason === 'AMBIGUITY_TRIPPED') {
-                            const dateMatches = candidateBookings.filter((b: any) => {
-                                const bIn = new Date(b.check_in).toISOString().split('T')[0];
-                                const bOut = new Date(b.check_out).toISOString().split('T')[0];
-                                return bIn === fact.check_in && bOut === fact.check_out;
-                            });
-
-                            const eligible_unenriched_matches = dateMatches.filter((b: any) =>
-                                EmailProcessor.isMaskedGuestName(b.guest_name)
-                            );
-
-                            payloadData = {
-                                ...fact,
-                                candidate_booking_ids: eligible_unenriched_matches.map((b: any) => b.id),
-                                candidate_property_ids: eligible_unenriched_matches.map((b: any) => b.property_id),
-                                reason: 'AMBIGUITY_DATE_MATCH_MULTIPLE_UNENRICHED'
-                            };
-                        }
-
-                        await supabase.from('enrichment_review_items').insert({
-                            workspace_id: workspaceId,
-                            connection_id: connectionId,
-                            extracted_data: payloadData,
-                            status: 'pending'
-                        });
-                        missingCount++;
-                    }
+                    processedBookingIds.add(matchingBooking.id);
+                    console.log(`[EmailProcessor] ✅ Enriched booking ${matchingBooking.id} → ${fact.guest_name} (code: ${code})`);
+                } else {
+                    console.error(`[EmailProcessor] Failed to enrich ${matchingBooking.id}:`, updateError.message);
                 }
             }
         }
 
-        console.log(`[EmailProcessor] Enrichment Complete. Updated ${enrichedCount} bookings. Identified ${missingCount} missing bookings.`);
-        return { enriched: enrichedCount, missing: missingCount };
+        console.log(`[EmailProcessor] Enrichment complete: ${enrichedCount} bookings enriched`);
+        return { enriched: enrichedCount, missing: 0 };
     }
     /**
      * Reprocess stored Gmail messages and route unmatched reservations to Review items.

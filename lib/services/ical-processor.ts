@@ -2,14 +2,6 @@ import { createClient } from '@/lib/supabase/server';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 // --- Types ---
-interface ReservationFact {
-    confirmation_code?: string;
-    check_in?: string;
-    check_out?: string;
-    guest_name: string;
-    guest_count?: number;
-}
-
 interface ICalFeed {
     id: string;
     property_id: string;
@@ -46,10 +38,19 @@ function sanitizeForJson(obj: any): any {
 // --- Service ---
 export class ICalProcessor {
     /**
-     * Syncs a single iCal feed: fetches, parses, matches facts, and upserts bookings.
+     * Syncs a single iCal feed: fetches, parses, and upserts bookings.
+     * 
+     * CRITICAL RULE (Law 15 - Structural Enforcement):
+     * This function ONLY writes iCal data. It NEVER reads or writes enrichment columns:
+     *   - enriched_guest_name
+     *   - enriched_guest_count
+     *   - enriched_connection_id
+     *   - enriched_at
+     * 
+     * Enrichment is handled exclusively by EmailProcessor.enrichBookings()
      */
     static async syncFeed(feed: ICalFeed, workspaceId: string, supabaseClient?: SupabaseClient): Promise<SyncResult> {
-        const supabase = supabaseClient || await createClient(); // Use provided client or fallback to server client
+        const supabase = supabaseClient || await createClient();
         console.log(`[ICalProcessor] Processing feed ${feed.id} for property ${feed.property_id}`);
 
         let httpStatus = 0;
@@ -63,39 +64,10 @@ export class ICalProcessor {
         let events: any = {};
 
         try {
-            // 1. Load Reservation Facts for Enrichment (Workspace-scoped, including archived connections)
-            // Two-step query: get ALL connection IDs from workspace, then load facts
-            let facts: ReservationFact[] = [];
-            try {
-                const windowStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-                // Step 1: Get ALL connection IDs linked strictly to THIS property
-                const { data: linkedConnections } = await supabase
-                    .from('connection_properties')
-                    .select('connection_id')
-                    .eq('property_id', feed.property_id);
-
-                if (linkedConnections && linkedConnections.length > 0) {
-                    const connectionIds = linkedConnections.map(c => c.connection_id);
-
-                    // Step 2: Load facts from any of these connections
-                    const { data: rawFacts } = await supabase
-                        .from('reservation_facts')
-                        .select('*')
-                        .in('connection_id', connectionIds)
-                        .gt('check_out', windowStart);
-
-                    if (rawFacts) facts = rawFacts as any[];
-                }
-                console.log(`[ICalProcessor] Loaded ${facts.length} reservation facts for property ${feed.property_id}`);
-            } catch (e) {
-                console.warn('[ICalProcessor] Failed to load reservation facts:', e);
-            }
-
-            // 2. Fetch iCal Feed with 10s Timeout
+            // 1. Fetch iCal Feed with 10s Timeout
             const ical = require('node-ical');
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s hard limit
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
             let response;
             try {
@@ -124,10 +96,9 @@ export class ICalProcessor {
 
             if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
-            // 3. Parse ICS
+            // 2. Parse ICS
             events = await ical.async.parseICS(textBody);
 
-            // Validate
             let veventCount = 0;
             for (const k in events) {
                 if (events[k].type === 'VEVENT') veventCount++;
@@ -137,11 +108,12 @@ export class ICalProcessor {
             }
             eventCount = veventCount;
 
-            // 4. Process Events
+            // 3. Process Events
             for (const [uid, event] of Object.entries(events) as [string, any][]) {
                 if (event.type !== 'VEVENT') continue;
                 feedEventsFound++;
 
+                // Canonicalize UID (strip Lodgify prefix if present)
                 let canonicalUid = uid;
                 const lodgifyPattern = /^B\d+_(.+)$/;
                 const match = uid.match(lodgifyPattern);
@@ -149,108 +121,63 @@ export class ICalProcessor {
                     canonicalUid = match[1];
                 }
 
-                // Date Parsing
+                // Date Parsing — normalize to noon UTC
                 const toNoonUTC = (d: Date) => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0));
 
                 let start: Date | null = null;
                 let end: Date | null = null;
 
                 if (event.start) {
-                    let d = new Date(event.start);
+                    const d = new Date(event.start);
                     start = (event.start.dateOnly || event.datetype === 'date') ? toNoonUTC(d) : d;
                 }
                 if (event.end) {
-                    let d = new Date(event.end);
+                    const d = new Date(event.end);
                     end = (event.end.dateOnly || event.datetype === 'date') ? toNoonUTC(d) : d;
                 }
 
                 if (!start || !end) continue;
 
-                // 5. Enrichment Logic
+                // Extract raw iCal data
                 const summary = event.summary || 'Blocked';
-                let guestName = summary;
-                let guestCount = 1;
-                let guestFirst = null;
-                let guestLastInitial = null;
-                // Prefer user-defined name, fallback to source type
-                let platform = feed.source_name || feed.name || 'External';
-                let enriched = false;
+                const platform = feed.source_name || feed.name || 'External';
+                const sanitizedRawData = sanitizeForJson(event);
 
-                const startStr = start.toISOString().split('T')[0];
-                const endStr = end.toISOString().split('T')[0];
-
-                const factMatches = facts.filter(f => {
-                    // Code Match
-                    if (f.confirmation_code && f.confirmation_code.length >= 6) {
-                        if (summary.includes(f.confirmation_code) || event.description?.includes(f.confirmation_code)) {
-                            return true;
-                        }
-                    }
-                    // Strict Date Match
-                    if (f.check_in === startStr && f.check_out === endStr) return true;
-                    return false;
-                });
-
-                if (factMatches.length === 1) {
-                    const matchedFact = factMatches[0];
-                    enriched = true;
-                    // Only override if the fact actually has a non-empty guest_name
-                    if (matchedFact.guest_name && matchedFact.guest_name.trim() !== '') {
-                        guestName = matchedFact.guest_name;
-                    }
-                    guestCount = matchedFact.guest_count || 1;
-                    // If enriched via email parser, we usually know it's Airbnb from the parser logic,
-                    // but we should technically trust the FEED SOURCE NAME if the user set it (e.g. "My Airbnb").
-                    // So we stick to `feed.source_name` unless undefined.
-
-                    if (guestName) {
-                        const parts = guestName.split(' ');
-                        if (parts.length > 0) guestFirst = parts[0];
-                        if (parts.length > 1) guestLastInitial = parts[1].replace('.', '');
-                    }
-                } else {
-                    if (summary && (summary.includes('Reserved') || summary.toLowerCase().includes('blocking'))) {
-                        guestName = 'Reserved';
-                    }
-                }
-
-
-                // 6. Safe Lookup & Write Booking (Law 16: external_uid + property_id first)
-                let targetBooking: any = undefined;
+                // 4. Look up existing booking (Law 16: external_uid + property_id first)
+                let targetBooking: any = null;
 
                 try {
-                    // Step 1: Look up by canonical identity (external_uid + property_id)
-                    const { data: uidMatch, error: uidError } = await supabase
+                    // Primary lookup: external_uid + property_id
+                    const { data: uidMatch } = await supabase
                         .from('bookings')
-                        .select('id, check_in, check_out, guest_name, guest_first_name, guest_last_initial, guest_count, status, is_active, platform, external_uid, raw_data')
+                        .select('id')
                         .eq('workspace_id', workspaceId)
                         .eq('property_id', feed.property_id)
                         .eq('external_uid', canonicalUid)
                         .limit(1)
                         .maybeSingle();
 
-                    if (!uidError && uidMatch) {
+                    if (uidMatch) {
                         targetBooking = uidMatch;
                     }
 
-                    // Step 2: Fallback — exact date match (no window) on same property only
+                    // Fallback: exact date match (no window — Law 16)
                     if (!targetBooking) {
                         const inDateStr = start.toISOString().split('T')[0];
                         const outDateStr = end.toISOString().split('T')[0];
 
-                        const { data: dateMatch, error: dateError } = await supabase
+                        const { data: dateMatch } = await supabase
                             .from('bookings')
-                            .select('id, check_in, check_out, guest_name, guest_first_name, guest_last_initial, guest_count, status, is_active, platform, external_uid, raw_data')
+                            .select('id')
                             .eq('workspace_id', workspaceId)
                             .eq('property_id', feed.property_id)
                             .eq('is_active', true)
                             .eq('check_in', `${inDateStr}T12:00:00.000Z`)
                             .eq('check_out', `${outDateStr}T12:00:00.000Z`)
-                            .order('last_synced_at', { ascending: false, nullsFirst: false })
                             .limit(1)
                             .maybeSingle();
 
-                        if (!dateError && dateMatch) {
+                        if (dateMatch) {
                             targetBooking = dateMatch;
                         }
                     }
@@ -258,60 +185,19 @@ export class ICalProcessor {
                     console.error('[ICalProcessor] Failed to query existing booking:', e);
                 }
 
-                // 6b. Preserve existing real guest names — universal guard
-                // If targetBooking has a real (non-masked) name, always keep it.
-                // Protects names set by enrichBookings(), manual review, or prior sync.
-                const isMaskedName = (n: string | null | undefined) => {
-                    if (!n) return true;
-                    return ['Reserved', 'Blocked', 'Not available', 'Unknown', 'Private'].some(m =>
-                        n.toLowerCase() === m.toLowerCase() || n.toLowerCase().startsWith(m.toLowerCase())
-                    );
-                };
-
-                if (targetBooking) {
-                    // Preserve enriched_from_fact flag if already set
-                    enriched = enriched || !!(targetBooking.raw_data?.from_fact_id);
-
-                    // If existing booking has a real guest name and iCal is sending a masked one, keep the real name
-                    if (isMaskedName(guestName) && targetBooking.guest_name && !isMaskedName(targetBooking.guest_name)) {
-                        guestName = targetBooking.guest_name;
-                        guestFirst = targetBooking.guest_first_name || guestFirst;
-                        guestLastInitial = targetBooking.guest_last_initial || guestLastInitial;
-                        console.log(`[ICalProcessor] Preserved existing guest name "${guestName}" for ${uid}`);
-                    }
-                }
-
-
-                const sanitizedRawData = sanitizeForJson(event);
-                const payload = {
+                // 5. Build payload — ONLY iCal fields
+                const icalPayload: any = {
                     workspace_id: workspaceId,
                     property_id: feed.property_id,
                     source_type: feed.source_type,
                     external_uid: canonicalUid,
                     check_in: start.toISOString(),
                     check_out: end.toISOString(),
-                    guest_name: guestName,
-                    guest_count: guestCount,
-                    guest_first_name: guestFirst,
-                    guest_last_initial: guestLastInitial,
+                    guest_name: summary,
+                    guest_count: 1,
                     status: 'confirmed',
                     platform: platform,
-                    raw_data: {
-                        ...sanitizedRawData,
-                        enriched_from_fact: enriched,
-                        ...(enriched && factMatches[0] ? { from_fact_id: (factMatches[0] as any).id } : {}),
-                        // Preserve enrichment fields that iCal should never overwrite
-                        ...(targetBooking?.raw_data?.from_fact_id && !(enriched && factMatches[0])
-                            ? { from_fact_id: targetBooking.raw_data.from_fact_id } : {}),
-                        ...(targetBooking?.raw_data?.enriched_from_review
-                            ? { enriched_from_review: targetBooking.raw_data.enriched_from_review } : {}),
-                        ...(targetBooking?.raw_data?.connection_label_name
-                            ? { connection_label_name: targetBooking.raw_data.connection_label_name } : {}),
-                        ...(targetBooking?.raw_data?.connection_label_color
-                            ? { connection_label_color: targetBooking.raw_data.connection_label_color } : {}),
-                        ...(targetBooking?.raw_data?.enriched_manually
-                            ? { enriched_manually: targetBooking.raw_data.enriched_manually } : {}),
-                    },
+                    raw_data: sanitizedRawData,
                     last_synced_at: new Date().toISOString(),
                     source_feed_id: feed.id,
                     is_active: true
@@ -321,48 +207,49 @@ export class ICalProcessor {
                 let isChange = false;
 
                 if (targetBooking) {
-                    const isIdentical =
-                        new Date(targetBooking.check_in).getTime() === new Date(payload.check_in).getTime() &&
-                        new Date(targetBooking.check_out).getTime() === new Date(payload.check_out).getTime() &&
-                        targetBooking.guest_name === payload.guest_name &&
-                        targetBooking.guest_count === payload.guest_count &&
-                        targetBooking.status === payload.status &&
-                        targetBooking.is_active === payload.is_active &&
-                        targetBooking.platform === payload.platform &&
-                        targetBooking.external_uid === payload.external_uid;
-
-                    if (!isIdentical) {
-                        const { error } = await supabase
-                            .from('bookings')
-                            .update(payload)
-                            .eq('id', targetBooking.id);
-                        bookingError = error;
-                        isChange = true;
-                    }
-                } else {
+                    // UPDATE existing booking — never touch enrichment columns
                     const { error } = await supabase
                         .from('bookings')
-                        .insert([payload]);
+                        .update({
+                            check_in: icalPayload.check_in,
+                            check_out: icalPayload.check_out,
+                            guest_name: icalPayload.guest_name,
+                            guest_count: icalPayload.guest_count,
+                            status: icalPayload.status,
+                            platform: icalPayload.platform,
+                            raw_data: icalPayload.raw_data,
+                            last_synced_at: icalPayload.last_synced_at,
+                            source_feed_id: icalPayload.source_feed_id,
+                            is_active: icalPayload.is_active
+                        })
+                        .eq('id', targetBooking.id);
                     bookingError = error;
-                    isChange = true;
+                    isChange = !error;
+                } else {
+                    // INSERT new booking
+                    const { error } = await supabase
+                        .from('bookings')
+                        .insert([icalPayload]);
+                    bookingError = error;
+                    isChange = !error;
                 }
 
                 if (bookingError) {
-                    console.error(`[ICalProcessor] Sync DB Error | Feed: ${feed.id} | Prop: ${feed.property_id} | UID: ${canonicalUid} | Range: ${start.toISOString()} - ${end.toISOString()} | Err:`, bookingError.message || bookingError);
+                    // Log but don't fail the whole sync
+                    console.error(`[ICalProcessor] DB Error | Feed: ${feed.id} | UID: ${canonicalUid} | Err:`, bookingError.message);
                 } else if (isChange) {
                     totalUpdated++;
                 }
             }
 
-            // 7. Update Feed Status (Success)
-            // Count active bookings for stat
+            // 6. Update Feed Status (Success)
             const { count: activeBookingCount } = await supabase
                 .from('bookings')
                 .select('*', { count: 'exact', head: true })
                 .eq('source_feed_id', feed.id)
                 .eq('is_active', true);
 
-            const { error: updateError } = await supabase.from('ical_feeds').update({
+            await supabase.from('ical_feeds').update({
                 last_synced_at: new Date().toISOString(),
                 last_sync_status: 'success',
                 last_error: null,
@@ -374,32 +261,7 @@ export class ICalProcessor {
                 last_booking_count: activeBookingCount ?? 0
             }).eq('id', feed.id);
 
-            if (updateError) {
-                console.error(`[ICalProcessor] Failed to update feed status for ${feed.id}:`, updateError);
-            } else {
-                console.log(`[ICalProcessor] Successfully updated timestamp for feed ${feed.id}`);
-            }
-
-            // Log to ical_sync_log only when events were created/updated.
-            // Silent no-op syncs (nothing changed) produce no log record.
-            if (totalUpdated > 0) {
-                const { error: logError } = await supabase.from('ical_sync_log').insert({
-                    workspace_id: workspaceId,
-                    property_id: feed.property_id,
-                    channel: feed.source_type,
-                    synced_at: new Date().toISOString(),
-                    events_found: feedEventsFound,
-                    events_created: totalUpdated, // Using processed_count as created (upserts)
-                    events_updated: 0,
-                    events_cancelled: 0,
-                    success: true,
-                    error_message: null
-                });
-
-                if (logError) {
-                    console.error('[ICalProcessor] Failed to insert ical_sync_log:', logError);
-                }
-            }
+            console.log(`[ICalProcessor] Feed ${feed.id} complete: ${feedEventsFound} events, ${totalUpdated} changes`);
 
             return {
                 feed_id: feed.id,
@@ -412,7 +274,6 @@ export class ICalProcessor {
             console.error(`[ICalProcessor] Error syncing feed ${feed.id}:`, err);
             syncError = err.message || 'Unknown error';
 
-            // Update Feed Status (Error)
             await supabase.from('ical_feeds').update({
                 last_synced_at: new Date().toISOString(),
                 last_sync_status: 'error',
@@ -425,30 +286,12 @@ export class ICalProcessor {
                 last_booking_count: 0
             }).eq('id', feed.id);
 
-            // Log to ical_sync_log (failure)
-            const { error: logError } = await supabase.from('ical_sync_log').insert({
-                workspace_id: workspaceId,
-                property_id: feed.property_id,
-                channel: feed.source_type,
-                synced_at: new Date().toISOString(),
-                events_found: feedEventsFound,
-                events_created: 0,
-                events_updated: 0,
-                events_cancelled: 0,
-                success: false,
-                error_message: syncError
-            });
-
-            if (logError) {
-                console.error('[ICalProcessor] Failed to insert ical_sync_log:', logError);
-            }
-
             return {
                 feed_id: feed.id,
                 success: false,
                 events_found: feedEventsFound,
                 processed_count: totalUpdated,
-                error: syncError || undefined
+                error: syncError
             };
         }
     }
