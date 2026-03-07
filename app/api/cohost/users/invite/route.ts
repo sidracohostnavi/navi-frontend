@@ -66,7 +66,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: inviteError?.message || 'Invite failed' }, { status: 500 });
   }
 
-  const inviteUrl = `${request.nextUrl.origin}/cohost/invite?token=${token}`;
+  const host = request.headers.get('host');
+  const protocol = request.headers.get('x-forwarded-proto') || 'https';
+  const inviteUrl = `${protocol}://${host}/cohost/invite?token=${token}`;
 
   // Store invite_url server-side so it's always retrievable (no localStorage dependency)
   await service
