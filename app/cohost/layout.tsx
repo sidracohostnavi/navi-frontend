@@ -19,6 +19,7 @@ export default function CohostLayout({
   const [user, setUser] = useState<User | null>(null);
   const [hasWorkspace, setHasWorkspace] = useState<boolean | null>(null); // null = loading
   const [userPerms, setUserPerms] = useState<FeaturePermissions | null>(null);
+  const [loadingPerms, setLoadingPerms] = useState(true);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const supabase = createClient();
@@ -46,9 +47,14 @@ export default function CohostLayout({
           }
         } catch {
           setHasWorkspace(false);
+        } finally {
+          setLoadingPerms(false);
         }
       } else if (!user) {
         setHasWorkspace(false);
+        setLoadingPerms(false);
+      } else {
+        setLoadingPerms(false);
       }
     };
     checkUser();
@@ -104,6 +110,18 @@ export default function CohostLayout({
   // For standalone pages (invite), render without nav
   if (isStandalonePage) {
     return <>{children}</>;
+  }
+
+  // If we are still fetching the user's role from the API, show a loading skeleton
+  if (loadingPerms) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-pulse flex flex-col items-center">
+          <div className="h-8 w-8 bg-gray-200 rounded-full mb-4"></div>
+          <div className="h-4 w-24 bg-gray-200 rounded"></div>
+        </div>
+      </div>
+    );
   }
 
   // If user has no workspace, show minimal page (no nav to browse)

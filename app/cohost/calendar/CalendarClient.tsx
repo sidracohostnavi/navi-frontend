@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { getPermissionsForRole, type FeaturePermissions } from '@/lib/roles/roleConfig';
@@ -192,6 +192,14 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const isCleaner = userRole === 'cleaner';
   const supabase = createClient();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current) {
+      setContainerWidth(scrollContainerRef.current.offsetWidth);
+    }
+  }, []);
 
   // Layout State
   const [sidebarWidth, setSidebarWidth] = useState(260); // Default to desktop, effect changes it
@@ -767,7 +775,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
           })}
 
           {/* Property Rows */}
-          {!loading && properties.map((property, rowIdx) => {
+          {containerWidth > 0 && !loading && properties.map((property, rowIdx) => {
             const gridRow = rowIdx + 2;
             const allPropertyBookings = bookings.filter(b => b.propertyId === property.id);
 
