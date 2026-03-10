@@ -7,8 +7,11 @@ export default function CoHostLandingPage() {
             <nav className="fixed top-0 w-full bg-white/80 backdrop-blur-sm border-b border-[#FA5A5A]/20 z-50">
                 <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                        <img src="/cohost-mascot.png" alt="Navi CoHost" className="h-8 w-auto object-contain shrink-0" />
-                        <span className="text-xl font-semibold text-[#FA5A5A] truncate hidden sm:block">Navi CoHost</span>
+                        <img src="/cohost-mascot.png" alt="Navi CoHost Logo" className="h-10 w-auto object-contain shrink-0" />
+                        <div className="flex flex-col leading-none hidden sm:flex justify-center tracking-tight">
+                            <span className="text-lg font-bold text-gray-900">Navi</span>
+                            <span className="text-xl font-extrabold text-[#FA5A5A]">CoHost</span>
+                        </div>
                     </div>
                     <div className="flex items-center gap-4">
                         <Link href="/auth/login" className="text-gray-600 hover:text-gray-900 transition">

@@ -110,13 +110,18 @@ function SignupContent() {
                 <div className="bg-white rounded-2xl shadow-sm p-8">
                     {isCoHostUI ? (
                         <div className="flex flex-col items-center mb-8">
-                            <img
-                                src="/cohost-mascot.png"
-                                alt="Navi CoHost"
-                                className="w-16 h-16 mb-4"
-                            />
-                            <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
-                            <p className="text-gray-600">Create an account for Navi CoHost</p>
+                            <div className="flex flex-col items-center justify-center mb-6">
+                                <img
+                                    src="/cohost-mascot.png"
+                                    alt="Navi CoHost Logo"
+                                    className="h-16 w-auto object-contain mb-2"
+                                />
+                                <div className="flex flex-col leading-none text-center tracking-tight">
+                                    <span className="text-xl font-bold text-gray-900">Navi</span>
+                                    <span className="text-3xl font-extrabold text-[#FA5A5A]">CoHost</span>
+                                </div>
+                            </div>
+                            <h1 className="text-xl font-medium text-gray-800">Create your free account</h1>
                         </div>
                     ) : (
                         <div className="text-center mb-8">
