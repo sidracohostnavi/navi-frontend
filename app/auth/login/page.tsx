@@ -104,7 +104,7 @@ function LoginContent() {
                                 <img
                                     src="/cohost-logo-full.png"
                                     alt="Navi CoHost Logo"
-                                    className="h-32 w-auto object-contain mb-2"
+                                    className="h-48 w-auto object-contain mb-2"
                                 />
                             </div>
                             <h1 className="text-xl font-medium text-gray-800">Sign in to your account</h1>
