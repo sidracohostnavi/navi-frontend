@@ -196,10 +196,15 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [containerWidth, setContainerWidth] = useState(0);
 
   useLayoutEffect(() => {
-    if (scrollContainerRef.current) {
-      setContainerWidth(scrollContainerRef.current.offsetWidth);
-    }
-  }, []);
+    // Wait for the next tick to ensure grid and hydration are completely painted
+    // Otherwise absolute positioning arithmetic may execute before proper CSS Grid reflow
+    const timer = setTimeout(() => {
+      if (scrollContainerRef.current) {
+        setContainerWidth(scrollContainerRef.current.offsetWidth);
+      }
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [isMobile]);
 
   // Layout State
   const [sidebarWidth, setSidebarWidth] = useState(260); // Default to desktop, effect changes it
@@ -208,6 +213,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     setSidebarWidth(isMobile ? 52 : 260);
   }, [isMobile]);
   const [isResizing, setIsResizing] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   // Infinite Scroll & Navigation State
   const [rangeStart, setRangeStart] = useState<Date | null>(null);
@@ -231,6 +237,9 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     min.setMonth(now.getMonth() - 12);
     min.setDate(1);
     setMinDate(min);
+
+    // Explicitly mark safe to render dimensional data
+    setIsHydrated(true);
 
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -775,7 +784,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
           })}
 
           {/* Property Rows */}
-          {containerWidth > 0 && !loading && properties.map((property, rowIdx) => {
+          {isHydrated && containerWidth > 0 && !loading && properties.map((property, rowIdx) => {
             const gridRow = rowIdx + 2;
             const allPropertyBookings = bookings.filter(b => b.propertyId === property.id);
 
