@@ -102,14 +102,10 @@ function LoginContent() {
                         <div className="flex flex-col items-center mb-8">
                             <div className="flex flex-col items-center justify-center mb-6">
                                 <img
-                                    src="/cohost-mascot.png"
+                                    src="/cohost-logo-full.png"
                                     alt="Navi CoHost Logo"
-                                    className="h-20 w-auto object-contain mb-3"
+                                    className="h-24 w-auto object-contain mb-2"
                                 />
-                                <div className="flex flex-col items-center leading-none">
-                                    <span className="text-2xl font-bold text-[#FA5A5A] tracking-wide mb-1">Navi</span>
-                                    <span className="text-2xl font-extrabold text-[#FA5A5A] tracking-wider">CoHost</span>
-                                </div>
                             </div>
                             <h1 className="text-xl font-medium text-gray-800">Sign in to your account</h1>
                         </div>
