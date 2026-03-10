@@ -7,8 +7,8 @@ export default function CoHostLandingPage() {
             <nav className="fixed top-0 w-full bg-white/80 backdrop-blur-sm border-b border-[#F87B7B]/20 z-50">
                 <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                        <img src="/cohost-mascot.png" alt="Navi CoHost" className="w-8 h-8" />
-                        <span className="text-xl font-semibold text-[#F87B7B]">Navi CoHost</span>
+                        <img src="/cohost-mascot.png" alt="Navi CoHost" className="h-8 w-auto object-contain shrink-0" />
+                        <span className="text-xl font-semibold text-[#F87B7B] truncate hidden sm:block">Navi CoHost</span>
                     </div>
                     <div className="flex items-center gap-4">
                         <Link href="/auth/login" className="text-gray-600 hover:text-gray-900 transition">
@@ -252,8 +252,8 @@ export default function CoHostLandingPage() {
             <footer className="py-10 px-6 bg-white border-t border-gray-100">
                 <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
                     <div className="flex items-center gap-2">
-                        <img src="/cohost-mascot.png" alt="Navi CoHost" className="w-6 h-6 grayscale opacity-60" />
-                        <span className="text-gray-600 font-medium">Navi CoHost</span>
+                        <img src="/cohost-mascot.png" alt="Navi CoHost" className="h-6 w-auto object-contain shrink-0 grayscale opacity-60" />
+                        <span className="text-gray-600 font-medium whitespace-nowrap">Navi CoHost</span>
                     </div>
                     <p className="text-gray-400 text-sm">
                         © 2026 Navi CoHost. Made with ❤️ for hosts.
