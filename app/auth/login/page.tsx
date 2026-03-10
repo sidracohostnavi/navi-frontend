@@ -16,7 +16,13 @@ function LoginContent() {
 
     const router = useRouter();
     const searchParams = useSearchParams();
-    const next = searchParams.get('next') || '/entry';
+
+    // Default redirect depends on which domain we're on (client-side check)
+    const isCoHost = typeof window !== 'undefined' &&
+        (window.location.origin.includes('cohostnavi.com') || window.location.origin.includes('localhost:3000'));
+    const defaultNext = isCoHost ? '/cohost/calendar' : '/entry';
+
+    const next = searchParams.get('next') || defaultNext;
     const supabase = createClient();
 
     // Check if user is already authenticated

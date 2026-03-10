@@ -10,6 +10,7 @@ const PUBLIC_ROUTES = [
   '/auth/callback',
   '/entry', // Entry handles its own auth check
   '/cohost', // Public Landing Page
+  '/cohost-home',  // Cohost dedicated landing page
 ];
 
 // Routes that should be ignored by proxy
@@ -24,12 +25,24 @@ export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const host = (request.headers.get('host') || '').toLowerCase().split(':')[0];
 
-  if (pathname === '/' && (host === 'cohostnavi.com' || host === 'www.cohostnavi.com')) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/cohost';
-    return NextResponse.rewrite(url);
-  }
+  // CoHost domain detection (production + local testing)
+  const isCoHostDomain = host === 'cohostnavi.com' || host === 'www.cohostnavi.com' || host === 'localhost';
 
+  if (isCoHostDomain) {
+    // Rewrite root to CoHost landing page
+    if (pathname === '/') {
+      const url = request.nextUrl.clone();
+      url.pathname = '/cohost-home';
+      return NextResponse.rewrite(url);
+    }
+
+    // Block NaviVerse routes for CoHost users
+    if (pathname.startsWith('/pulse') || pathname.startsWith('/orakl') || pathname.startsWith('/agents') || pathname.startsWith('/constellation') || pathname.startsWith('/dashboard') || pathname.startsWith('/entry')) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/cohost-home';
+      return NextResponse.redirect(url);
+    }
+  }
   // Skip proxy for ignored patterns
   if (IGNORED_PATTERNS.some(pattern => pathname.startsWith(pattern))) {
     return NextResponse.next();

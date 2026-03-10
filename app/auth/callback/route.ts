@@ -9,7 +9,12 @@ export async function GET(request: NextRequest) {
   const code = requestUrl.searchParams.get('code');
   const token_hash = requestUrl.searchParams.get('token_hash');
   const type = requestUrl.searchParams.get('type') as any; // 'signup' | 'email' | 'recovery' | 'invite'
-  const next = requestUrl.searchParams.get('next') || '/dashboard';
+
+  // Default redirect depends on which domain we're on
+  const isCoHost = requestUrl.origin.includes('cohostnavi.com') || requestUrl.origin.includes('localhost:3000');
+  const defaultNext = isCoHost ? '/cohost/calendar' : '/dashboard';
+
+  const next = requestUrl.searchParams.get('next') || defaultNext;
   const error_description = requestUrl.searchParams.get('error_description');
 
   if (error_description) {
