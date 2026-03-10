@@ -116,8 +116,8 @@ function SignupContent() {
                                     alt="Navi CoHost Logo"
                                     className="h-16 w-auto object-contain mb-2"
                                 />
-                                <div className="flex flex-col leading-none text-center tracking-tight">
-                                    <span className="text-xl font-bold text-gray-900">Navi</span>
+                                <div className="flex flex-col items-center leading-none tracking-tight">
+                                    <span className="text-xl font-bold text-[#FA5A5A]">Navi</span>
                                     <span className="text-3xl font-extrabold text-[#FA5A5A]">CoHost</span>
                                 </div>
                             </div>

@@ -8,8 +8,8 @@ export default function CoHostLandingPage() {
                 <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <img src="/cohost-mascot.png" alt="Navi CoHost Logo" className="h-10 w-auto object-contain shrink-0" />
-                        <div className="flex flex-col leading-none hidden sm:flex justify-center tracking-tight">
-                            <span className="text-lg font-bold text-gray-900">Navi</span>
+                        <div className="flex flex-col items-center leading-none hidden sm:flex justify-center tracking-tight">
+                            <span className="text-lg font-bold text-[#FA5A5A]">Navi</span>
                             <span className="text-xl font-extrabold text-[#FA5A5A]">CoHost</span>
                         </div>
                     </div>
