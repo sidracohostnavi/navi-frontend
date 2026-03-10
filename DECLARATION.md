@@ -1,6 +1,7 @@
 # DECLARATION.md — Navi CoHost System Doctrine
 **Status:** Immutable Foundation  
-**Authority:** This document supersedes all other context. When in conflict, this wins.
+**Authority:** This document supersedes all other context. When in conflict, this wins.  
+**Last Updated:** 2026-03-06
 
 ---
 
@@ -20,23 +21,24 @@ These cannot be changed without explicit owner authorization. If a task would vi
 ### Law 1 — iCal Supremacy
 The `.ics` feed is the sole source of truth for booking existence and dates. Gmail/email NEVER creates, deletes, or modifies booking dates. Email is enrichment-only (guest name, guest count). If iCal says a date is blocked, it is blocked — period.
 
-### Law 2 — Enrichment Guardrail
-Auto-enrichment is only permitted when exactly ONE unenriched candidate booking exists for a given reservation fact.
+### Law 2 — Enrichment Guardrail (Confirmation Code Only)
+Auto-enrichment matches by **confirmation code ONLY**. No date-based matching.
 
-**Candidate definition:** A booking is only a candidate if its guest name is masked/unenriched (e.g. "Reserved", "Blocked", null). An already-enriched booking is NEVER a candidate regardless of whether it shares the same check-in/checkout dates.
+**How it works:**
+- Gmail confirmation emails contain codes (e.g., `HMXXXXXX` for Airbnb, `B########` for Lodgify)
+- iCal booking descriptions contain the same codes in the reservation URL
+- Enrichment matches `fact.confirmation_code` to `booking.raw_data.description`
+- If no code match → no enrichment (booking stays unenriched)
 
-**Counting rule:** Only count unenriched bookings when evaluating whether to auto-enrich.
-- `eligible_unenriched_count === 1` → auto-enrich safely
-- `eligible_unenriched_count > 1` → route both to Review Inbox, do not auto-enrich either
-
-**Timing rule:** Two unenriched bookings sharing identical dates across different properties is only ambiguous when both arrive simultaneously and are both unenriched. Once one is resolved/enriched, the other becomes the sole unenriched candidate and auto-enriches on the next cron run without human intervention.
+**Why this is safe:**
+- Cleaning blocks have no confirmation codes (description is null) → automatically excluded
+- No ambiguity between properties with same dates
+- No date window bugs possible
 
 **Absolute prohibitions:**
-- Never count enriched bookings as candidates
-- Never block auto-enrichment because an enriched booking shares the same dates
+- Never match by date ranges
 - Never overwrite a real human name with a platform placeholder
 - Never reassign `property_id` via Gmail enrichment
-- Never create duplicate Review Inbox items for the same confirmation code
 
 ### Law 3 — Idempotency
 Every sync operation must produce the same database state when run multiple times. All inserts use `ON CONFLICT` upsert logic. Cron and manual sync must behave identically.
@@ -69,30 +71,42 @@ A booking may only be set to `is_active = false` when the iCal feed explicitly r
 When multiple iCal feeds (Lodgify, Spark & Stay, Sidra A/C) report the same stay for the same property, exactly ONE booking record must exist. The first feed to create the booking owns the `external_uid` and `source_feed_id`. Subsequent feeds matching by date may only update `guest_name` if currently masked. They may never change `check_in`, `check_out`, `property_id`, or `external_uid`. The canonical ownership does not transfer between feeds after creation.
 
 ### Law 13 — Cleaning Blocks Are Not Guest Bookings
-Policy-enabled properties (currently: Farmhouse Estate) have Airbnb automatically insert cleaning blocks before check-in and after checkout. These appear in iCal feeds as "Airbnb (Not available)" events. They must be stored as bookings with a visual distinction but are never enriched, never sent to Review Inbox, and never matched against reservation facts. Do not attempt to enrich or resolve cleaning blocks. Non-policy properties do not generate these blocks.
+Policy-enabled properties have Airbnb automatically insert cleaning blocks before check-in and after checkout. These appear in iCal feeds as "Airbnb (Not available)" events. They have **no confirmation code** in their description, so they are automatically excluded from enrichment matching. They are displayed on the calendar with visual distinction but never enriched.
 
-**Unenriched count clarification:** The following guest names appear as "unenriched" in SQL queries but are operational blocks that must never be enriched:
-- `P********** T***` — Lodgify Preparation Time buffers (1-day padding around bookings)
-- `Airbnb (Not available)` — Airbnb cleaning blocks on policy-enabled properties (Law 13)
-- `Closed Period`, `Not Available` — Owner-initiated blocks (H2)
-
-Only bookings with guest_name `Reserved` (Airbnb masked name) or similar platform placeholders are genuine unenriched guest bookings eligible for enrichment. When reporting enrichment statistics, distinguish real unenriched bookings from operational blocks.
+**Operational blocks (never enriched):**
+- `P********** T***` — Lodgify Preparation Time buffers
+- `Airbnb (Not available)` — Airbnb cleaning blocks
+- `Closed Period`, `Not Available` — Owner-initiated blocks
 
 ### Law 14 — Enrichment Runs Every Cron Cycle
 Gmail enrichment runs on every cron cycle regardless of whether iCal found changes. This ensures newly arrived bookings are enriched promptly without waiting for a coincidental iCal change. Previously gated — owner-authorized removal on 2026-03-04.
 
-### Law 15 — Enrichment Fields Are Immutable to iCal Sync
-iCal sync must never overwrite these fields on an existing booking, regardless of what the feed contains:
-- `from_fact_id`
-- `enriched_from_review`
-- `enriched_manually`
-- `connection_label_name`
-- `connection_label_color`
+### Law 15 — Structural Separation of iCal and Enrichment Data ⭐ NEW
+**This is the core architectural principle. iCal and enrichment data are stored in separate columns and can NEVER overwrite each other.**
 
-These fields are set by the enrichment pipeline and Review Inbox. Once written, they survive all future iCal syncs. The merge pattern is: `{ ...sanitizedRawData, ...preservedEnrichmentFields }` where preserved fields always win over iCal data.
+| Data Type | Written By | Columns |
+|-----------|-----------|---------|
+| iCal data | `ical-processor.ts` only | `guest_name`, `check_in`, `check_out`, `external_uid`, `raw_data` |
+| Enrichment data | `email-processor.ts` only | `enriched_guest_name`, `enriched_guest_count`, `enriched_connection_id`, `enriched_at` |
+
+**Display priority:** `enriched_guest_name ?? manual_guest_name ?? guest_name`
+
+**Why this exists:** Previous "name guard" logic was fragile and broke repeatedly. Structural separation makes it physically impossible for iCal sync to overwrite enrichment data.
+
+**Rules:**
+- `ical-processor.ts` NEVER reads or writes `enriched_*` columns
+- `email-processor.ts` NEVER reads or writes `guest_name` (only reads `raw_data` for code matching)
+- A booking is "unenriched" if `enriched_guest_name IS NULL`
+- A booking is "enriched" if `enriched_guest_name IS NOT NULL`
 
 ### Law 16 — Booking Identity Is (external_uid, property_id)
-The canonical identity of a booking is the tuple `(external_uid, property_id)`. This is the only valid primary lookup key. If `external_uid` is absent, fall back to exact date match (`check_in = X AND check_out = Y`, day-level string comparison, no window) on the same property only. A booking matched by date on property A must never be updated by a feed belonging to property B. This law extends and strengthens the Named Prohibition on date range lookups below.
+The canonical identity of a booking is the tuple `(external_uid, property_id)`. This is the only valid primary lookup key. If `external_uid` is absent, fall back to exact date match (`check_in = X AND check_out = Y`, day-level string comparison, no window) on the same property only. A booking matched by date on property A must never be updated by a feed belonging to property B.
+
+### Law 17 — Gmail Enrichment Gate
+Gmail enrichment runs only when at least one active future booking has `enriched_guest_name IS NULL`. When all future bookings are enriched, Gmail processing is skipped entirely. The gate is based on unenriched booking count — never on iCal change count.
+
+### Law 18 — Fact Deduplication ⭐ NEW
+Before inserting a new `reservation_fact`, check if one with the same `confirmation_code` already exists for that `connection_id`. If yes, skip insertion. Never create duplicate facts for the same booking.
 
 ---
 
@@ -106,45 +120,131 @@ The canonical identity of a booking is the tuple `(external_uid, property_id)`. 
 | Inbox / Messaging | `app/cohost/messaging/`, `app/api/cohost/generate-draft/` | `docs/inbox/INBOX_CONTRACT.md` |
 | Properties | `app/cohost/properties/`, `app/api/cohost/properties/` | `docs/properties/PROPERTIES_CONTRACT.md` |
 | Review | `app/cohost/review/`, `app/api/cohost/review/` | `docs/review/REVIEW_CONTRACT.md` |
-| Cron | `app/api/cron/enrichment/`, `app/api/cron/refresh/` | Stabilization in progress — handle with extra care |
+| Cron | `app/api/cron/enrichment/`, `app/api/cron/refresh/` | See Laws 14, 17 |
 
 ---
 
-## Current Stability Status
+## Current Stability Status (Updated 2026-03-06)
 
-- **Manual sync:** Stable
-- **Cron sync:** Stabilized — log noise fixed, Gmail gate restored, Airbnb +1 day checkout offset reverted (iCal and email dates already agree — the +1 was wrong and introduced mismatches)
-- **Enrichment under cron:** Guardrail correctly counts only unenriched candidates. However no booking has been auto-enriched by cron since launch. Retroactive enrichment requires manual backfill or Review Inbox.
-- **Enrichment dedup:** Fixed — Review Inbox no longer creates duplicate items per confirmation code
-- **Review Inbox enrichment survival:** Fixed — iCal sync now preserves from_fact_id and enrichment fields (Law 15)
-- **Calendar colors and labels:** Fixed — from_fact_id pipeline working, backfill completed for existing bookings
-- **Cleaner role:** Implemented — read-only calendar view, pastel coral booking slots, mobile and desktop
-- **Hydration/SSR fix:** Deployed — IS_MOBILE now uses useEffect to prevent server/client mismatch on load
-- **Messaging:** Partially built — human-in-the-loop draft system exists, auto-send not yet enabled
-- **OPEN ISSUE:** Farmhouse Spark & Stay bookings exist in DB (is_active=true) but do not appear in calendar API response. Lodgify bookings for same property display correctly. Root cause unidentified — under active investigation.
-- **OPEN ISSUE:** No booking has been auto-enriched by cron pipeline since system launch. Manual backfill and Review Inbox have been the only enrichment paths in practice.
+| Component | Status | Notes |
+|-----------|--------|-------|
+| iCal sync | ✅ Stable | Writes to `guest_name` only, never touches enrichment |
+| Email fetching | ✅ Stable | Gmail API pagination working |
+| Fact creation | ✅ Stable | Duplicate prevention active |
+| Enrichment matching | ✅ Stable | Code-only matching, no date ambiguity |
+| Display logic | ✅ Stable | Priority: manual > enriched > legacy > raw |
+| Structural separation | ✅ Deployed | iCal cannot overwrite enrichment |
+| Cron refresh | ⚠️ Timeout issues | Works manually, times out on cron-job.org (30s limit) |
+| ical_sync_log | ⚠️ Minor issue | `'other'` channel constraint, non-blocking |
 
 ---
 
-## Key Type Definitions (Use These Exactly)
+## Key Service Behaviors (Read Before Touching These Files)
 
-From `lib/supabase/cohostTypes.ts`:
+**`ical-processor.ts → syncFeed()`:**
+- Writes ONLY: `guest_name`, `check_in`, `check_out`, `external_uid`, `raw_data`, `platform`, `status`, `last_synced_at`
+- NEVER touches: `enriched_guest_name`, `enriched_guest_count`, `enriched_connection_id`, `enriched_at`
+- Lookup order: `external_uid + property_id` first, then exact date match
+- No enrichment logic — that's email-processor's job
 
-| Type | Values |
-|------|--------|
-| `TicketStatus` | `'new' \| 'drafted' \| 'approved' \| 'sent' \| 'escalated'` |
-| `MessageDirection` | `'inbound' \| 'outbound'` |
-| `RiskLevel` | `'low' \| 'med' \| 'high'` |
-| `WorkspaceRole` | `'owner' \| 'admin' \| 'operator'` |
+**`email-processor.ts → enrichBookings()`:**
+- Matches by confirmation code ONLY (code in `fact` matches code in `booking.raw_data.description`)
+- Writes ONLY: `enriched_guest_name`, `enriched_guest_count`, `enriched_connection_id`, `enriched_at`
+- NEVER touches: `guest_name`, `check_in`, `check_out`, `property_id`
+- Cleaning blocks excluded automatically (no code = no match)
 
-⚠️ **Known Type Debt — Do Not Activate:**  
-`cohostTypes.ts` contains `PmsType = 'hostaway' | 'guesty' | 'hospitable'` and a `pms_type` field on `CohostProperty`. These are dormant leftovers from an over-build. Do not reference, extend, or wire up anything related to `PmsType`. Treat it as dead code.
+**`email-processor.ts → processMessages()`:**
+- Classify first → only `reservation_confirmation` proceeds to parse
+- Always stores raw to `gmail_messages` regardless of classification
+- Idempotent: checks `confirmation_code` before inserting facts (Law 18)
 
-From `lib/services/email-classifier.ts`:  
-Classification is deterministic regex only — no AI, no external calls. `is_reservation_candidate: true` is the only gate to enrichment processing. Do not add AI or probabilistic logic to this file.
+**`email-classifier.ts`:**
+- Pure deterministic regex — no AI, no external calls, no side effects
+- Blocklist checked before confirmation patterns
+- Do NOT add probabilistic or AI logic to this file
 
-Gmail status values on `connections` table: `'connected' | 'error' | 'pending' | 'needs_reconnect'`  
-Token refresh failure → `needs_reconnect` (never silently continue).
+---
+
+## Database Schema — Key Tables
+
+### bookings
+| Column | Type | Written By |
+|--------|------|------------|
+| `id` | UUID | System |
+| `workspace_id` | UUID | iCal sync |
+| `property_id` | UUID | iCal sync |
+| `guest_name` | TEXT | iCal sync (raw summary) |
+| `check_in` | TIMESTAMPTZ | iCal sync |
+| `check_out` | TIMESTAMPTZ | iCal sync |
+| `external_uid` | TEXT | iCal sync |
+| `raw_data` | JSONB | iCal sync (contains description with confirmation code) |
+| `enriched_guest_name` | TEXT | Enrichment only |
+| `enriched_guest_count` | INTEGER | Enrichment only |
+| `enriched_connection_id` | UUID | Enrichment only |
+| `enriched_at` | TIMESTAMPTZ | Enrichment only |
+| `manual_guest_name` | TEXT | Manual resolution |
+| `manual_connection_id` | UUID | Manual resolution |
+| `manually_resolved_at` | TIMESTAMPTZ | Manual resolution |
+
+### reservation_facts
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID | Primary key |
+| `connection_id` | UUID | Which Gmail connection |
+| `confirmation_code` | TEXT | Used for matching (e.g., HMXXXXXX) |
+| `guest_name` | TEXT | Parsed from email |
+| `guest_count` | INTEGER | Parsed from email |
+| `check_in` | DATE | For reference only |
+| `check_out` | DATE | For reference only |
+
+---
+
+## NAMED PROHIBITION — Date Range Booking Lookups
+
+**This has been fixed. Do not reintroduce it.**
+
+### Why date matching was removed from enrichment:
+- Two properties can have bookings on the same dates
+- Cleaning blocks have the same dates as adjacent bookings
+- Date windows (±1 day) cause false matches
+
+### The current approach:
+- Enrichment matches by confirmation code ONLY
+- iCal lookup uses `external_uid + property_id` (exact match)
+- Date fallback in iCal is exact match only, same property only
+
+### When Claude suggests date matching for enrichment:
+Stop it immediately. Say: *"No date matching in enrichment. Code-only. See DECLARATION.md Law 2."*
+
+---
+
+## Hospitality Domain Rules
+
+These are operational truths about the short-term rental domain.
+
+### H1 — Same-Day Turnovers Are Standard
+Checkout day is the same as the next guest's check-in day. This is intentional and normal.
+
+### H2 — Blocked Dates Are Not Guest Bookings
+"Not Available", "Closed Period", and "Airbnb (Not available)" events are owner-initiated blocks, not guest stays. They have no confirmation codes and are never enriched.
+
+### H3 — Double-Booking Is a Crisis Event
+Two active bookings on the same property with overlapping dates = critical alert.
+
+### H4 — Cancellations Must Be Tracked Explicitly
+When a booking's UID disappears from iCal, record it as cancellation.
+
+### H5 — iCal Feeds Have Finite History Windows
+Bookings may age out of feeds (6-12 months past). Don't treat this as cancellation.
+
+### H6 — Dates Are Property-Local Not UTC
+Hawaii is UTC-10. Store as noon UTC, display with timezone awareness.
+
+### H7 — Confirmation Codes Are Platform-Scoped
+Airbnb: `/^HM/i`. Lodgify: `/^B\d+/`. Match within connection, not globally.
+
+### H8 — Guest Count From iCal Is Unreliable
+iCal sends 1 as default. Only trust `enriched_guest_count` from email parsing.
 
 ---
 
@@ -160,96 +260,43 @@ Token refresh failure → `needs_reconnect` (never silently continue).
 - Change RLS policies
 - Modify any file in `scripts/migrations/`
 - Create new pages or UI components beyond what is asked
+- Add date-based matching to enrichment logic
+- Modify `enriched_*` columns from iCal sync
+- Modify `guest_name` from enrichment
 
 ---
 
-## Known Architecture Risk — Root Cause of Duplicates
+## Quick Diagnostic Queries
 
-`lib/services/ical-processor.ts` uses a **find-then-insert** pattern, NOT a true SQL `ON CONFLICT` upsert.
+### Check unenriched bookings
+```sql
+SELECT id, guest_name, enriched_guest_name, check_in::date,
+       substring(raw_data->>'description' from '/details/([A-Z0-9]+)') as code
+FROM bookings
+WHERE is_active = true AND enriched_guest_name IS NULL AND check_in > NOW()
+ORDER BY check_in;
+```
 
-The existing booking lookup inside `syncFeed` queries by a **date range window (±1 day)**, not by the canonical identity tuple `(property_id, source_type, external_uid)`. This means: if the date window query returns 0 results for any reason (date shifted, race condition, cron parallelism), it **inserts a new booking instead of updating** → duplicate.
+### Check if facts exist for codes
+```sql
+SELECT confirmation_code, guest_name, check_in, connection_id
+FROM reservation_facts
+WHERE confirmation_code IN ('HMXXXXXX', 'HMYYYYYY')
+ORDER BY created_at DESC;
+```
 
-The Calendar Contract states identity is `(property_id, source_type, external_uid)`. The lookup does not use this. **Do not touch this logic without explicit instruction.** When the time comes to fix it, look up by `external_uid + property_id + source_type` first, then fall back to date range only if no UID match exists.
-
----
-
-## Key Service Behaviors (Read Before Touching These Files)
-
-**`ical-processor.ts → syncFeed()`:**
-- Loads facts scoped to property via `connection_properties` join
-- Enriches at sync time only when `factMatches.length === 1`
-- Preserves existing real guest names — will not overwrite with masked name
-- Find-then-update/insert pattern (NOT SQL upsert) — see risk above
-
-**`email-processor.ts → enrichBookings()`:**
-- Guardrail correctly implemented: only enriches when `eligible_unenriched_matches.length === 1`
-- Routes to `enrichment_review_items` on ambiguity or no match
-- Never writes `property_id` — only `guest_name`, `guest_count`, `guest_first_name`, `guest_last_initial`
-- UPDATE only — never inserts bookings
-
-**`email-processor.ts → processMessages()`:**
-- Classify first → only `reservation_confirmation` proceeds to parse
-- Always stores raw to `gmail_messages` regardless of classification
-- Idempotent: checks `source_gmail_message_id` before inserting facts
-
-**`email-classifier.ts`:**
-- Pure deterministic regex — no AI, no external calls, no side effects
-- Blocklist checked before confirmation patterns
-- Do NOT add probabilistic or AI logic to this file
+### Check Gmail connection health
+```sql
+SELECT id, name, gmail_status, gmail_last_success_at, gmail_last_error_message
+FROM connections WHERE gmail_refresh_token IS NOT NULL;
+```
 
 ---
 
-## NAMED PROHIBITION — Date Range Booking Lookups
+## Branding Guidelines
 
-**This has been fixed multiple times. Do not reintroduce it.**
+### B1 — CoHost Primary Brand Color
+The official primary color for CoHost experiences is Coral (`#F87B7B`). Use this exact hex code (e.g., `bg-[#F87B7B]`, `text-[#F87B7B]`) for primary buttons, important accents, and brand highlights when rendering CoHost-specific UI.
 
-The booking lookup in `ical-processor.ts → syncFeed()` must use `external_uid + property_id + source_type` as the primary key — not date ranges.
-
-### Why agents keep writing ±1 day / date windows:
-Dates in `bookings` are stored as noon UTC timestamps (e.g. `2026-01-15T12:00:00.000Z`). Agents see timestamps and assume exact equality is unsafe due to timezone drift, so they write range queries (`gte check_in`, `lt nextDay`). This reasoning is wrong for this system.
-
-### Why it is wrong here:
-- The iCal `external_uid` is a stable string identifier (e.g. `airbnb_1234567890`). String equality on it is exact and safe.
-- Date range windows introduce ambiguity when two bookings at different properties share the same dates — which is a normal, expected state in a multi-property system.
-- Date range windows are also vulnerable to cron race conditions.
-
-### The correct lookup order (do not deviate):
-1. Look up by `external_uid + property_id + source_type` — exact string match
-2. If and only if no UID match → fall back to exact date match (`check_in = X AND check_out = Y`, day-level string comparison, no window)
-3. Never use ±1 day, `nextDay`, or any date window in booking identity lookups
-
-### When Claude suggests a date window for booking lookups:
-Stop it immediately. Say: *"No date windows. Look up by external_uid first. See DECLARATION.md."*
-
----
-
-## Hospitality Domain Rules
-
-These are operational truths about the short-term rental domain. They are not immutable system laws but must be respected in all feature design, display logic, and data handling.
-
-### H1 — Same-Day Turnovers Are Standard
-Checkout day is the same as the next guest's check-in day. This is intentional and normal in this business. The calendar must support back-to-back bookings without treating checkout day as a gap or unavailable slot. Cleaning is handled via Airbnb policy defined at the listing level — not by Navi.
-
-### H2 — Blocked Dates Are Not Guest Bookings
-"Not Available", "Closed Period", and "Airbnb (Not available)" events are owner-initiated blocks, not guest stays. They must never trigger guest messaging, enrichment attempts, or Review Inbox items. They are displayed on the calendar as **charcoal grey** blocks (distinct from the light grey of unenriched guest reservations). They are stored with `source_type = 'block'` to distinguish them from guest bookings.
-
-### H3 — Double-Booking Is a Crisis Event
-If two active bookings exist for the same property on overlapping dates from different platforms, this is a double-booking — the most operationally damaging failure in multi-platform hosting. The system must detect this on every iCal sync and surface it immediately as a critical alert. It must never be stored silently. Detection query: any two active bookings on the same property where date ranges overlap.
-
-### H4 — Cancellations Must Be Tracked Explicitly
-When a booking's UID disappears from its iCal feed, that is a cancellation. Setting `is_active = false` is not sufficient. The system must record: cancellation timestamp, which feed reported the removal, and surface a freed-dates alert so the host can re-open availability. Past bookings must never be silently deactivated without a cancellation record.
-
-### H5 — iCal Feeds Have Finite History Windows
-Airbnb and Lodgify iCal feeds expose a rolling window of bookings (typically 6-12 months past, 12-24 months future). A booking disappearing from a feed does not always mean cancellation — it may have aged out of the window. The system must never deactivate a past booking (check_out < today) solely because it no longer appears in the feed. Past bookings are frozen records. Only future bookings should be evaluated for cancellation when their UID goes absent.
-
-### H6 — Dates Are Property-Local Not UTC
-A check-in date of "July 7" means July 7 at the property's local timezone — not UTC midnight. All date display in the UI must use the property's local timezone. Hawaii properties (HST, UTC-10) are particularly affected — a UTC midnight timestamp renders as the previous day local time. Dates stored as noon UTC (`T12:00:00Z`) are a safe approximation for Hawaii but must be displayed with timezone awareness, not raw UTC.
-
-### H7 — Confirmation Codes Are Platform-Scoped
-Airbnb Spark & Stay codes match `/^HM/i`. Lodgify codes match `/^B\d+/`. Other platforms have their own formats. Confirmation code lookups during enrichment must be scoped to the connection/platform — never matched globally across all connections. Two bookings from different platforms could theoretically share the same code format. Always pair confirmation code with connection_id when looking up reservation facts.
-
-### H8 — Guest Count From iCal Is Unreliable
-When a booking arrives with `guest_count = 1` from iCal, treat it as unknown — not as confirmed single occupancy. Airbnb sends 1 as a default when the actual count is unavailable. Displaying "1 guest" when the count is genuinely unknown misrepresents the booking. The UI should show guest count only when it has been confirmed via email enrichment or manual entry. Until then, display no count or a "?" indicator.
-
-### Law 17 — Gmail Enrichment Gate Is Governed by Unenriched Booking Count
-Gmail enrichment runs only when at least one active future booking has a masked guest name (Reserved, Blocked, or null). When all future bookings are enriched, Gmail is skipped entirely. The gate is based on unenriched booking count — never on iCal change count. Do not change this gate without explicit owner authorization. Established 2026-03-04.
+### B2 — CoHost Mascot
+The official mascot image `public/cohost-mascot.png` should be used for CoHost brand headers and landing pages, replacing the default NaviVerse branding on CoHost domains.
