@@ -254,18 +254,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
 
-  // Force a microscopic scroll -> repaint on load to fix the CSS Grid overlap glitch
-  useEffect(() => {
-    if (scrollContainerRef.current && bookings.length > 0) {
-      const container = scrollContainerRef.current;
-      requestAnimationFrame(() => {
-        container.scrollLeft = 1;
-        requestAnimationFrame(() => {
-          container.scrollLeft = 0;
-        });
-      });
-    }
-  }, [bookings]);
+
 
   const [propertyPolicies, setPropertyPolicies] = useState<Record<string, any>>({});
   const [feedMap, setFeedMap] = useState<Record<string, string>>({});
