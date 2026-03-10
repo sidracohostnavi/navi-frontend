@@ -16,6 +16,12 @@ function SignupContent() {
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
     const [checkingAuth, setCheckingAuth] = useState(true);
+    const [isCoHostUI, setIsCoHostUI] = useState(false);
+
+    useEffect(() => {
+        const host = window.location.hostname;
+        setIsCoHostUI(host.includes('cohostnavi.com') || host.includes('localhost'));
+    }, []);
 
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -102,14 +108,26 @@ function SignupContent() {
         <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
             <div className="max-w-md w-full">
                 <div className="bg-white rounded-2xl shadow-sm p-8">
-                    <div className="text-center mb-8">
-                        <h1 className="text-2xl font-semibold text-gray-900">
-                            Create Account
-                        </h1>
-                        <p className="text-sm text-gray-500 mt-2">
-                            Create an account to access Naviverse
-                        </p>
-                    </div>
+                    {isCoHostUI ? (
+                        <div className="flex flex-col items-center mb-8">
+                            <img
+                                src="/cohost-mascot.png"
+                                alt="Navi CoHost"
+                                className="w-16 h-16 mb-4"
+                            />
+                            <h1 className="text-2xl font-bold text-gray-900">Create Account</h1>
+                            <p className="text-gray-600">Create an account for Navi CoHost</p>
+                        </div>
+                    ) : (
+                        <div className="text-center mb-8">
+                            <h1 className="text-2xl font-semibold text-gray-900">
+                                Create Account
+                            </h1>
+                            <p className="text-sm text-gray-500 mt-2">
+                                Create an account to access Naviverse
+                            </p>
+                        </div>
+                    )}
 
                     {/* Google Sign Up Button */}
                     <button
@@ -243,7 +261,8 @@ function SignupContent() {
                         <button
                             type="submit"
                             disabled={loading}
-                            className="w-full py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className={`w-full py-2.5 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${isCoHostUI ? "bg-[#F87B7B] hover:bg-[#e66b6b]" : "bg-blue-600 hover:bg-blue-700"
+                                }`}
                         >
                             {loading ? 'Creating Account...' : 'Create Account'}
                         </button>

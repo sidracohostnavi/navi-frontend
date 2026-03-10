@@ -51,6 +51,8 @@ export async function GET(request: NextRequest) {
 
       // Create Workspace on user's first login
       const { data: { session } } = await supabase.auth.getSession();
+      let workspaceId: string | null = null;
+      let finalRedirectPath = next;
 
       if (isCoHost && session?.user) {
         const userId = session.user.id;
@@ -69,7 +71,9 @@ export async function GET(request: NextRequest) {
           .limit(1)
           .maybeSingle();
 
-        if (!existingOwnership) {
+        if (existingOwnership) {
+          workspaceId = existingOwnership.workspace_id;
+        } else {
           // User doesn't own a workspace yet — create one
 
           // SAFETY CHECK 2: Double-check no workspace with this creator exists
@@ -100,6 +104,7 @@ export async function GET(request: NextRequest) {
             if (wsError || !newWorkspace) {
               console.error('[Auth Callback] Failed to create workspace:', wsError);
             } else {
+              workspaceId = newWorkspace.id;
               // Step 2: Add user as owner
               const { error: memberError } = await adminClient
                 .from('cohost_workspace_members')
@@ -116,6 +121,7 @@ export async function GET(request: NextRequest) {
                   .from('cohost_workspaces')
                   .delete()
                   .eq('id', newWorkspace.id);
+                workspaceId = null;
               } else {
                 // Step 3: Create default automation settings
                 const { error: settingsError } = await adminClient
@@ -134,11 +140,29 @@ export async function GET(request: NextRequest) {
             }
           }
         }
+
+        // SMART ROUTING: Check if user has any properties
+        // New users (0 properties) → wizard
+        // Returning users (has properties) → calendar
+        if (workspaceId) {
+          finalRedirectPath = '/cohost/calendar'; // default for returning users
+
+          const { data: properties } = await adminClient
+            .from('cohost_properties')
+            .select('id')
+            .eq('workspace_id', workspaceId)
+            .limit(1);
+
+          if (!properties || properties.length === 0) {
+            // New user with no properties — send to wizard
+            finalRedirectPath = '/cohost/properties/new';
+          }
+        }
       }
 
-      console.log('[Auth Callback] Redirecting to:', next);
+      console.log('[Auth Callback] Redirecting to:', finalRedirectPath);
       // Ensure we don't double-slash or mess up query params
-      const target = next.startsWith('http') ? next : `${requestUrl.origin}${next}`;
+      const target = finalRedirectPath.startsWith('http') ? finalRedirectPath : `${requestUrl.origin}${finalRedirectPath}`;
       console.log('[Auth Callback] Final Target URL:', target);
       return NextResponse.redirect(target);
     } else {
@@ -155,8 +179,9 @@ export async function GET(request: NextRequest) {
     })
     if (!error) {
 
-      // Create Workspace on user's first login
       const { data: { session } } = await supabase.auth.getSession();
+      let workspaceId: string | null = null;
+      let finalRedirectPath = next;
 
       if (isCoHost && session?.user) {
         const userId = session.user.id;
@@ -175,7 +200,9 @@ export async function GET(request: NextRequest) {
           .limit(1)
           .maybeSingle();
 
-        if (!existingOwnership) {
+        if (existingOwnership) {
+          workspaceId = existingOwnership.workspace_id;
+        } else {
           // User doesn't own a workspace yet — create one
 
           // SAFETY CHECK 2: Double-check no workspace with this creator exists
@@ -206,6 +233,7 @@ export async function GET(request: NextRequest) {
             if (wsError || !newWorkspace) {
               console.error('[Auth Callback] Failed to create workspace:', wsError);
             } else {
+              workspaceId = newWorkspace.id;
               // Step 2: Add user as owner
               const { error: memberError } = await adminClient
                 .from('cohost_workspace_members')
@@ -222,6 +250,7 @@ export async function GET(request: NextRequest) {
                   .from('cohost_workspaces')
                   .delete()
                   .eq('id', newWorkspace.id);
+                workspaceId = null;
               } else {
                 // Step 3: Create default automation settings
                 const { error: settingsError } = await adminClient
@@ -240,10 +269,28 @@ export async function GET(request: NextRequest) {
             }
           }
         }
+
+        // SMART ROUTING: Check if user has any properties
+        // New users (0 properties) → wizard
+        // Returning users (has properties) → calendar
+        if (workspaceId) {
+          finalRedirectPath = '/cohost/calendar'; // default for returning users
+
+          const { data: properties } = await adminClient
+            .from('cohost_properties')
+            .select('id')
+            .eq('workspace_id', workspaceId)
+            .limit(1);
+
+          if (!properties || properties.length === 0) {
+            // New user with no properties — send to wizard
+            finalRedirectPath = '/cohost/properties/new';
+          }
+        }
       }
 
-      console.log('Auth callback success (Token), redirecting to:', next);
-      const target = next.startsWith('http') ? next : `${requestUrl.origin}${next}`;
+      console.log('Auth callback success (Token), redirecting to:', finalRedirectPath);
+      const target = finalRedirectPath.startsWith('http') ? finalRedirectPath : `${requestUrl.origin}${finalRedirectPath}`;
       return NextResponse.redirect(target);
     } else {
       console.error('Auth Token Verify Error:', error);
