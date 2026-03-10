@@ -2,13 +2,13 @@ import Link from 'next/link';
 
 export default function CoHostLandingPage() {
     return (
-        <div className="min-h-screen bg-gradient-to-b from-[#F87B7B]/10 to-white">
+        <div className="min-h-screen bg-gradient-to-b from-[#FA5A5A]/10 to-white">
             {/* Navigation */}
-            <nav className="fixed top-0 w-full bg-white/80 backdrop-blur-sm border-b border-[#F87B7B]/20 z-50">
+            <nav className="fixed top-0 w-full bg-white/80 backdrop-blur-sm border-b border-[#FA5A5A]/20 z-50">
                 <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
                     <div className="flex items-center gap-2">
                         <img src="/cohost-mascot.png" alt="Navi CoHost" className="h-8 w-auto object-contain shrink-0" />
-                        <span className="text-xl font-semibold text-[#F87B7B] truncate hidden sm:block">Navi CoHost</span>
+                        <span className="text-xl font-semibold text-[#FA5A5A] truncate hidden sm:block">Navi CoHost</span>
                     </div>
                     <div className="flex items-center gap-4">
                         <Link href="/auth/login" className="text-gray-600 hover:text-gray-900 transition">
@@ -16,7 +16,7 @@ export default function CoHostLandingPage() {
                         </Link>
                         <Link
                             href="/auth/signup"
-                            className="bg-[#F87B7B] hover:bg-[#e66b6b] text-white px-5 py-2 rounded-full font-medium transition"
+                            className="bg-[#FA5A5A] hover:bg-[#e04848] text-white px-5 py-2 rounded-full font-medium transition"
                         >
                             Start Free
                         </Link>
@@ -27,7 +27,7 @@ export default function CoHostLandingPage() {
             {/* Hero Section */}
             <section className="pt-32 pb-20 px-6">
                 <div className="max-w-4xl mx-auto text-center">
-                    <p className="text-[#F87B7B] font-medium mb-4">Built by a real host who understands the chaos of managing bookings.</p>
+                    <p className="text-[#FA5A5A] font-medium mb-4">Built by a real host who understands the chaos of managing bookings.</p>
                     <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
                         A Smarter Way to Host
                     </h1>
@@ -37,7 +37,7 @@ export default function CoHostLandingPage() {
                     <div className="flex flex-col sm:flex-row gap-4 justify-center mb-6">
                         <Link
                             href="/auth/signup"
-                            className="bg-[#F87B7B] hover:bg-[#e66b6b] text-white px-8 py-4 rounded-full font-semibold text-lg transition shadow-lg shadow-[#F87B7B]/30"
+                            className="bg-[#FA5A5A] hover:bg-[#e04848] text-white px-8 py-4 rounded-full font-semibold text-lg transition shadow-lg shadow-[#FA5A5A]/30"
                         >
                             Start Hosting Smarter
                         </Link>
@@ -65,7 +65,7 @@ export default function CoHostLandingPage() {
                             'Avoiding booking mistakes'
                         ].map((item, i) => (
                             <div key={i} className="flex items-center gap-3 text-gray-700">
-                                <span className="text-[#F87B7B]">✗</span>
+                                <span className="text-[#FA5A5A]">✗</span>
                                 <span>{item}</span>
                             </div>
                         ))}
@@ -77,7 +77,7 @@ export default function CoHostLandingPage() {
             </section>
 
             {/* Features Section */}
-            <section className="py-20 px-6 bg-[#F87B7B]/5">
+            <section className="py-20 px-6 bg-[#FA5A5A]/5">
                 <div className="max-w-6xl mx-auto">
                     <h2 className="text-3xl md:text-4xl font-bold text-gray-900 text-center mb-16">
                         Everything You Need to Stay Organized
@@ -91,7 +91,7 @@ export default function CoHostLandingPage() {
                             <p className="text-gray-600 mb-4">See all your bookings in one clear timeline.</p>
                             <div className="flex flex-wrap gap-2">
                                 {['Airbnb', 'VRBO', 'Direct bookings', 'Cleaning blocks'].map((tag) => (
-                                    <span key={tag} className="bg-[#F87B7B]/10 text-[#F87B7B] px-3 py-1 rounded-full text-sm">
+                                    <span key={tag} className="bg-[#FA5A5A]/10 text-[#FA5A5A] px-3 py-1 rounded-full text-sm">
                                         {tag}
                                     </span>
                                 ))}
@@ -169,7 +169,7 @@ export default function CoHostLandingPage() {
                             }
                         ].map((item) => (
                             <div key={item.step} className="text-center">
-                                <div className="w-12 h-12 bg-[#F87B7B] text-white rounded-full flex items-center justify-center text-xl font-bold mx-auto mb-4">
+                                <div className="w-12 h-12 bg-[#FA5A5A] text-white rounded-full flex items-center justify-center text-xl font-bold mx-auto mb-4">
                                     {item.step}
                                 </div>
                                 <h3 className="text-lg font-semibold text-gray-900 mb-2">{item.title}</h3>
@@ -181,7 +181,7 @@ export default function CoHostLandingPage() {
             </section>
 
             {/* Trust Section */}
-            <section className="py-20 px-6 bg-[#F87B7B]/5">
+            <section className="py-20 px-6 bg-[#FA5A5A]/5">
                 <div className="max-w-3xl mx-auto text-center">
                     <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-6">
                         Built by a Host, for Hosts
@@ -233,14 +233,14 @@ export default function CoHostLandingPage() {
             </section>
 
             {/* Final CTA Section */}
-            <section className="py-20 px-6 bg-gradient-to-b from-[#F87B7B]/20 to-[#F87B7B]/5">
+            <section className="py-20 px-6 bg-gradient-to-b from-[#FA5A5A]/20 to-[#FA5A5A]/5">
                 <div className="max-w-3xl mx-auto text-center">
                     <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-6">
                         Start Hosting Smarter Today
                     </h2>
                     <Link
                         href="/auth/signup"
-                        className="inline-block bg-[#F87B7B] hover:bg-[#e66b6b] text-white px-10 py-4 rounded-full font-semibold text-lg transition shadow-lg shadow-[#F87B7B]/30"
+                        className="inline-block bg-[#FA5A5A] hover:bg-[#e04848] text-white px-10 py-4 rounded-full font-semibold text-lg transition shadow-lg shadow-[#FA5A5A]/30"
                     >
                         Create Your Free Account
                     </Link>

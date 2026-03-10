@@ -261,7 +261,7 @@ function SignupContent() {
                         <button
                             type="submit"
                             disabled={loading}
-                            className={`w-full py-2.5 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${isCoHostUI ? "bg-[#F87B7B] hover:bg-[#e66b6b]" : "bg-blue-600 hover:bg-blue-700"
+                            className={`w-full py-2.5 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${isCoHostUI ? "bg-[#FA5A5A] hover:bg-[#e04848]" : "bg-blue-600 hover:bg-blue-700"
                                 }`}
                         >
                             {loading ? 'Creating Account...' : 'Create Account'}

@@ -296,7 +296,7 @@ FROM connections WHERE gmail_refresh_token IS NOT NULL;
 ## Branding Guidelines
 
 ### B1 — CoHost Primary Brand Color
-The official primary color for CoHost experiences is Coral (`#F87B7B`). Use this exact hex code (e.g., `bg-[#F87B7B]`, `text-[#F87B7B]`) for primary buttons, important accents, and brand highlights when rendering CoHost-specific UI.
+The official primary color for CoHost experiences is Coral (`#FA5A5A`). Use this exact hex code (e.g., `bg-[#FA5A5A]`, `text-[#FA5A5A]`) for primary buttons, important accents, and brand highlights when rendering CoHost-specific UI.
 
 ### B2 — CoHost Mascot
 The official mascot image `public/cohost-mascot.png` should be used for CoHost brand headers and landing pages, replacing the default NaviVerse branding on CoHost domains.
