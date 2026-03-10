@@ -746,7 +746,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         <div
           className="grid relative"
           style={{
-            minWidth: 'max-content',
+            minWidth: `${sidebarWidth + (loadedDays * CELL_WIDTH)}px`,
             gridTemplateColumns: `${sidebarWidth}px repeat(${loadedDays}, ${CELL_WIDTH}px)`,
           }}
         >
