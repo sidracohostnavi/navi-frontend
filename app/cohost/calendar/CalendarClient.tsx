@@ -189,22 +189,32 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     fetchRole();
   }, []);
 
+
   const isCleaner = userRole === 'cleaner';
   const supabase = createClient();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const [containerWidth, setContainerWidth] = useState(0);
+  const [gridReady, setGridReady] = useState(false);
 
   useLayoutEffect(() => {
-    // Wait for the next tick to ensure grid and hydration are completely painted
-    // Otherwise absolute positioning arithmetic may execute before proper CSS Grid reflow
-    const timer = setTimeout(() => {
-      if (scrollContainerRef.current) {
-        setContainerWidth(scrollContainerRef.current.offsetWidth);
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    // Use ResizeObserver to detect when grid has real dimensions
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry && entry.contentRect.width > 0) {
+        setGridReady(true);
+        setContainerWidth(entry.contentRect.width);
+        observer.disconnect(); // Only need to detect once
       }
-    }, 50);
-    return () => clearTimeout(timer);
-  }, [isMobile]);
+    });
+
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, [isMobile]); // Re-evaluate if mobile breakpoint changes layout
 
   // Layout State
   const [sidebarWidth, setSidebarWidth] = useState(260); // Default to desktop, effect changes it
@@ -213,7 +223,6 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     setSidebarWidth(isMobile ? 52 : 260);
   }, [isMobile]);
   const [isResizing, setIsResizing] = useState(false);
-  const [isHydrated, setIsHydrated] = useState(false);
 
   // Infinite Scroll & Navigation State
   const [rangeStart, setRangeStart] = useState<Date | null>(null);
@@ -237,9 +246,6 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     min.setMonth(now.getMonth() - 12);
     min.setDate(1);
     setMinDate(min);
-
-    // Explicitly mark safe to render dimensional data
-    setIsHydrated(true);
 
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -783,8 +789,23 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
             );
           })}
 
+          {/* Loading State for Grid */}
+          {!gridReady && !loading && (
+            <div
+              className="absolute inset-x-0 top-[60px] bottom-0 flex items-center justify-center z-40"
+              style={{ minHeight: '300px' }}
+            >
+              <div className="flex items-center justify-center p-8 text-gray-400 bg-white/80 rounded-xl shadow-sm backdrop-blur-sm">
+                <div className="animate-pulse flex flex-col items-center">
+                  <div className="h-8 w-8 border-4 border-gray-200 border-t-blue-500 rounded-full animate-spin mb-4"></div>
+                  <span className="font-medium text-sm text-gray-500">Loading calendar layout...</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Property Rows */}
-          {isHydrated && containerWidth > 0 && !loading && properties.map((property, rowIdx) => {
+          {gridReady && !loading && properties.map((property, rowIdx) => {
             const gridRow = rowIdx + 2;
             const allPropertyBookings = bookings.filter(b => b.propertyId === property.id);
 
