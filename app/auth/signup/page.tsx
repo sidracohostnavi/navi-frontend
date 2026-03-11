@@ -114,7 +114,7 @@ function SignupContent() {
                                 <img
                                     src="/cohost-logo-full.png"
                                     alt="Navi CoHost Logo"
-                                    className="h-16 sm:h-20 w-auto max-w-[75vw] object-contain mb-2"
+                                    className="h-16 sm:h-20 w-auto object-contain mb-2 shrink-0"
                                 />
                             </div>
                             <h1 className="text-xl font-medium text-gray-800">Create your free account</h1>
