@@ -43,7 +43,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch workspace' }, { status: 500 });
     }
     
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const origin = request.nextUrl.origin;
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || origin;
     const returnUrl = `${appUrl}/cohost/settings?stripe=success`;
     const refreshUrl = `${appUrl}/api/cohost/stripe/connect`;
     
