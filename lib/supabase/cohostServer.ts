@@ -11,10 +11,10 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 // Service role client - bypasses RLS, use only in trusted server contexts
 export function createCohostServiceClient() {
   if (!supabaseServiceRoleKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is not set in environment variables')
+    console.error('SUPABASE_SERVICE_ROLE_KEY is not set in environment variables. Database operations requiring service role will fail.');
   }
   
-  return createClient(supabaseUrl, supabaseServiceRoleKey, {
+  return createClient(supabaseUrl, supabaseServiceRoleKey || '', {
     auth: {
       autoRefreshToken: false,
       persistSession: false
