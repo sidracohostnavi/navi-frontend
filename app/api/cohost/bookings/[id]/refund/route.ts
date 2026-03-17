@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
 import { stripe } from '@/lib/services/stripe-service';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

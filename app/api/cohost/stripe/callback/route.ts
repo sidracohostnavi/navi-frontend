@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
+
+export const dynamic = 'force-dynamic';
 import { checkAccountStatus } from '@/lib/services/stripe-service';
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createCohostServiceClient();
+    const supabase = await createClient();
+    const serviceRoleClient = createCohostServiceClient();
     
     // Get current user
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -39,7 +43,7 @@ export async function GET(request: NextRequest) {
     
     // Update local onboarding status based on details_submitted and charges_enabled
     if (status.chargesEnabled && status.detailsSubmitted) {
-      await supabase
+      await serviceRoleClient
         .from('cohost_workspaces')
         .update({ stripe_onboarding_complete: true })
         .eq('id', membership.workspace_id);
