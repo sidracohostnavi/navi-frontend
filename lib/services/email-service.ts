@@ -1,6 +1,11 @@
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resendKey = process.env.RESEND_API_KEY;
+if (!resendKey) {
+  console.warn('RESEND_API_KEY is missing from environment variables. Email features will fail.');
+}
+
+const resend = new Resend(resendKey || 're_dummy_key_for_build');
 
 const FROM_EMAIL = process.env.EMAIL_FROM || 'Navi CoHost <bookings@cohostnavi.com>';
 
