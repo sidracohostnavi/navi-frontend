@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }

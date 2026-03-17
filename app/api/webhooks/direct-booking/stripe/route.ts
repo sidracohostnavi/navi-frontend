@@ -7,6 +7,8 @@ import {
   sendHostNotificationEmail 
 } from '@/lib/services/email-service';
 
+export const dynamic = 'force-dynamic';
+
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
 
 export async function POST(request: NextRequest) {
