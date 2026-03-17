@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getPermissionsForRole, type FeaturePermissions } from '@/lib/roles/roleConfig';
 
@@ -164,6 +165,7 @@ const getGridPosition = (item: { startDate: string; endDate: string }, windowSta
 const DEFAULT_BOOKING_COLOR = '#e5e7eb'; // gray-200
 
 export default function CalendarClient({ apiBase }: { apiBase: string }) {
+  const router = useRouter();
   const [isMobile, setIsMobile] = useState(false);
   const [permissions, setPermissions] = useState<FeaturePermissions | null>(null);
   const [userRole, setUserRole] = useState<string>('');
@@ -1074,6 +1076,11 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                           ${isActive ? 'ring-2 ring-blue-500 ring-offset-1 shadow-lg' : 'hover:scale-[1.02] active:scale-[0.98]'}
                         `}
                                 style={finalStyle}
+                                onClick={() => {
+                                  if (booking.channel === 'direct') {
+                                    router.push(`/cohost/bookings/${booking.id}`);
+                                  }
+                                }}
                                 onMouseEnter={(e) => {
                                   if (!isEnriched && !isCleaner) return;
                                   const rect = e.currentTarget.getBoundingClientRect();

@@ -591,13 +591,65 @@ export class EmailProcessor {
             const code = fact.confirmation_code;
             if (!code || code.length < 6) continue;
 
-            // Find booking where raw_data contains this confirmation code
-            const matchingBooking = candidateBookings.find((b: any) => {
+            // Find booking where raw_data contains this confirmation code, OR fallback to Date + Fuzzy Name Match
+            const exactMatches = candidateBookings.filter((b: any) => {
                 if (processedBookingIds.has(b.id)) return false;
                 if (!b.raw_data) return false;
+
+                // Method 1: Strict Confirmation Code Match (Primary)
                 const rawStr = JSON.stringify(b.raw_data);
                 return rawStr.includes(code);
             });
+
+            let matchingBooking = exactMatches.length > 0 ? exactMatches[0] : undefined;
+
+            // Method 2: Fuzzy Name + Date Match (Fallback for Lodgify obfuscated iCal)
+            if (!matchingBooking) {
+                const fuzzyMatches = candidateBookings.filter((b: any) => {
+                    if (processedBookingIds.has(b.id)) return false;
+
+                    const dbCheckIn = b.check_in.substring(0, 10);
+                    const dbCheckOut = b.check_out.substring(0, 10);
+
+                    // Required Guard 1: Is this booking provably from Lodgify?
+                    const isLodgifyBooking =
+                        b.external_uid?.toLowerCase().includes('lodgify') ||
+                        (b.raw_data?.uid && b.raw_data.uid.toLowerCase().includes('lodgify'));
+
+                    // Required Guard 2: Is the fact provably from Lodgify? (Lodgify codes begin with 'B')
+                    const isLodgifyFact = fact.confirmation_code?.startsWith('B');
+
+                    // Required Guard 3: Exact Date Match
+                    const exactDateMatch = dbCheckIn === fact.check_in && dbCheckOut === fact.check_out;
+
+                    // Required Guard 4: Same Property Linkage
+                    const sameProperty = propertyIds.includes(b.property_id);
+
+                    if (isLodgifyBooking && isLodgifyFact && exactDateMatch && sameProperty) {
+                        const rawStr = JSON.stringify(b.raw_data || {}).toLowerCase();
+                        const factName = fact.guest_name.toLowerCase();
+                        const nameParts = factName.split(' ');
+
+                        // Required Guard 5: Fuzzy initial match on obfuscated summary
+                        if (nameParts.length > 0 && nameParts[0].length > 0) {
+                            const firstChar = nameParts[0][0];
+
+                            if (rawStr.includes(`"${firstChar}`) || rawStr.includes(`:${firstChar}`) || rawStr.includes(`summary":"${firstChar}`)) {
+                                return true;
+                            }
+                        }
+                    }
+
+                    return false;
+                });
+
+                // Required Guard 6: Uniqueness
+                // If multiple Lodgify bookings match the exact same fuzzy criteria, we reject them all.
+                if (fuzzyMatches.length === 1) {
+                    matchingBooking = fuzzyMatches[0];
+                    console.log(`[EmailProcessor] Fallback fuzzy match: ${fact.guest_name} matched to ${matchingBooking.id} safely (Lodgify Only)`);
+                }
+            }
 
             if (matchingBooking) {
                 // Write to enrichment columns ONLY
@@ -1049,7 +1101,7 @@ export class EmailProcessor {
             if (lodgifyCode) {
                 confirmation_code = lodgifyCode[1];
             } else {
-                const codeMatch = body.match(/(?:Confirmation code|Reservation ID).*?([A-Z0-9]{8,15})/i);
+                const codeMatch = body.match(/(?:Confirmation code|Reservation ID|BOOKING).*?([A-Z0-9]{8,15})/i);
                 if (codeMatch) confirmation_code = codeMatch[1];
             }
 

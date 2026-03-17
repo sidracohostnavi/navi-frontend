@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useReviewCount } from '@/lib/supabase/hooks/useReviewCount';
 import { getPermissionsForRole, type FeaturePermissions } from '@/lib/roles/roleConfig';
 import type { User } from '@supabase/supabase-js';
+import GmailAlertBanner from './components/GmailAlertBanner';
 
 export default function CohostLayout({
   children,
@@ -141,6 +142,7 @@ export default function CohostLayout({
 
   return (
     <>
+      <GmailAlertBanner />
       <style jsx global>{`
         /* Hide the global Naviverse navbar when inside cohost routes */
         body > nav {

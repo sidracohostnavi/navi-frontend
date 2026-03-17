@@ -1,0 +1,152 @@
+# Project Summary
+
+## 1. Directory Structure
+
+### `app/` Directory
+```
+app/
+├── agents
+├── api
+├── auth
+├── cohost
+├── constellation
+├── dashboard
+├── entry
+├── favicon.ico
+├── globals.css
+├── layout.tsx
+├── momassist
+├── orakl
+├── page.tsx
+├── pulse
+└── support
+```
+
+### `lib/` Directory
+```
+lib/
+├── apps
+├── components
+├── connectors
+├── contexts
+├── hooks
+├── memory
+├── parsers
+├── roles
+├── services
+├── supabase
+│   ├── auth.ts
+│   ├── authServer.ts
+│   ├── client.ts
+│   ├── cohostServer.ts
+│   ├── cohostTypes.ts
+│   ├── server.ts
+│   └── types.ts
+├── supabaseOraklClient.ts
+├── supabaseOraklServer.ts
+├── utils
+│   └── utils.ts
+└── workspaces
+```
+
+## 2. Database Tables
+*Note: Due to lack of direct credentialed access to run SQL against the remote DB on the fly, the exact table names extracted from the application's types ([cohostTypes.ts](file:///Users/sidra/Documents/GitHub/navi-frontend/lib/supabase/cohostTypes.ts) and [types.ts](file:///Users/sidra/Documents/GitHub/navi-frontend/lib/supabase/types.ts)) and previous interactions are:*
+
+- `bookings`
+- `cohost_actions_audit`
+- `cohost_automation_settings`
+- `cohost_conversations`
+- `cohost_drafts`
+- `cohost_escalations`
+- `cohost_messages`
+- `cohost_pms_accounts`
+- `cohost_properties`
+- `cohost_prompt_profiles`
+- `cohost_property_prompt_overrides`
+- `cohost_training_data`
+- `cohost_user_preferences`
+- `cohost_workspaces`
+- `cohost_workspace_members`
+- `ical_feeds`
+
+To get the exact schema snapshot, please execute in your Supabase SQL Editor:
+```sql
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;
+```
+
+## 3. API Routes
+Found 48 specific API routes ([route.ts](file:///Users/sidra/Documents/GitHub/navi-frontend/app/api/debug-env/route.ts)) in the application:
+
+```text
+auth/gmail/callback/route.ts
+auth/gmail/url/route.ts
+auth/login/route.ts
+auth/logout/route.ts
+auth/signup/route.ts
+cohost/approve/route.ts
+cohost/calendar/route.ts
+cohost/connections/[id]/enrich/route.ts
+cohost/connections/[id]/gmail/labels/route.ts
+cohost/connections/[id]/gmail/scan/route.ts
+cohost/connections/[id]/gmail/start/route.ts
+cohost/connections/[id]/health/route.ts
+cohost/connections/[id]/sync/route.ts
+cohost/connections/gmail/callback/route.ts
+cohost/connections/gmail/process/route.ts
+cohost/connections/gmail/test/route.ts
+cohost/debug/gmail/route.ts
+cohost/escalate/route.ts
+cohost/generate-draft/route.ts
+cohost/ical/feed/disable/route.ts
+cohost/ical/reset/route.ts
+cohost/ical/sync/route.ts
+cohost/mark-sent/route.ts
+cohost/properties/import/route.ts
+cohost/refresh/route.ts
+cohost/reprocess/route.ts
+cohost/review/[id]/resolve/route.ts
+cohost/review/items/route.ts
+cohost/send/route.ts
+cohost/settings/pms-account/route.ts
+cohost/users/[userId]/properties/route.ts
+cohost/users/accept/route.ts
+cohost/users/invite/route.ts
+cohost/users/list/route.ts
+cohost/users/revoke/route.ts
+cohost/users/role/route.ts
+cron/enrichment/route.ts
+cron/refresh/route.ts
+debug-env/route.ts
+dev/login-as/route.ts
+orakl/chat/route.ts
+stripe/checkout/route.ts
+stripe/webhook/route.ts
+support/clear-workspace/route.ts
+support/switch-workspace/route.ts
+webhooks/guesty/route.ts
+webhooks/hospitable/route.ts
+webhooks/hostaway/route.ts
+```
+
+## 4. Environment Variables
+Based on [.env.example](file:///Users/sidra/Documents/GitHub/navi-frontend/.env.example) and the presence of keys in [.env.local](file:///Users/sidra/Documents/GitHub/navi-frontend/.env.local), the following variables are needed:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_ORAKL_SUPABASE_URL`
+
+## 5. External Services Used
+Based on package dependencies and webhooks, the application employs the following external services:
+
+- **Supabase**: Database and Authentication
+- **Gmail API** (`googleapis`): Email integration / Enrichment pipeline
+- **OpenAI API** (`openai`): Chat / Draft generation
+- **Stripe** (`stripe`): Payments
+- **cron-job.org**: Triggers `/api/cron/...`
+- **Vercel**: Deployment and Hosting
+- **PMS Webhooks/Integrations**: 
+  - Hostaway
+  - Guesty
+  - Hospitable
+  - Airbnb, VRBO, Booking.com (via iCal/Email)

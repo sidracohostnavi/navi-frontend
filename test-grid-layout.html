@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  .grid-container {
+    display: grid;
+    min-width: 6560px; /* 260 + 45*140 */
+    grid-template-columns: 260px repeat(45, 140px);
+    overflow: auto;
+    border: 1px solid black;
+    height: 300px;
+    width: 1000px; /* Viewport smaller than content */
+  }
+  .cell { border-right: 1px solid #ddd; border-bottom: 1px solid #ddd; }
+  .booking-wrapper {
+    position: relative;
+    background: rgba(255,0,0,0.1);
+  }
+  .booking {
+    position: absolute;
+    left: 70px;
+    right: 126px; /* 140 * 0.9 */
+    top: 50%;
+    transform: translateY(-50%);
+    height: 48px;
+    background: blue;
+    color: white;
+    border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+  <div class="grid-container">
+    <div style="grid-column: 1; grid-row: 1;">Sidebar</div>
+    <div style="grid-column: 2; grid-row: 1;">Day 1</div>
+    <div style="grid-column: 3; grid-row: 1;">Day 2</div>
+    <div style="grid-column: 4; grid-row: 1;">Day 3</div>
+    
+    <!-- Booking 1: Spans Day 1 to Day 3 -->
+    <div class="booking-wrapper" style="grid-column: 2 / span 3; grid-row: 2;">
+       <div class="booking">Booking 1</div>
+    </div>
+    <!-- Booking 2: Spans Day 4 to Day 6 -->
+    <div class="booking-wrapper" style="grid-column: 5 / span 3; grid-row: 2;">
+       <div class="booking" style="background: green">Booking 2</div>
+    </div>
+  </div>
+</body>
+</html>
