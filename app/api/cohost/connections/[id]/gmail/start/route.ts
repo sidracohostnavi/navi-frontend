@@ -19,6 +19,13 @@ export async function GET(
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
+        if (!user.email_confirmed_at) {
+            return NextResponse.json({ 
+                error: 'Please verify your email address to connect a Gmail account.',
+                code: 'EMAIL_NOT_VERIFIED'
+            }, { status: 403 });
+        }
+
         // 2. Enforce Active Workspace
         const workspaceId = await ensureWorkspace(user.id);
 

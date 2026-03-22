@@ -73,7 +73,7 @@ function SignupContent() {
         setMessage(null);
 
         try {
-            const { error: signUpError } = await supabase.auth.signUp({
+            const { data, error: signUpError } = await supabase.auth.signUp({
                 email,
                 password,
                 options: {
@@ -87,10 +87,17 @@ function SignupContent() {
 
             if (signUpError) throw signUpError;
 
-            setMessage('Check your email for a confirmation link!');
+            if (data.session) {
+                // Email confirmation is disabled, user is logged in
+                setMessage('Initializing your workspace...');
+                await fetch('/api/cohost/workspaces/init', { method: 'POST' });
+                router.push('/cohost/properties/new');
+            } else {
+                setMessage('Check your email for a confirmation link!');
+                setLoading(false);
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'An error occurred');
-        } finally {
             setLoading(false);
         }
     };

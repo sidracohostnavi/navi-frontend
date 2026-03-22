@@ -44,6 +44,7 @@ function ConnectionsSettingsPageInner() {
     const [loading, setLoading] = useState(true);
     const [connections, setConnections] = useState<Connection[]>([]);
     const [properties, setProperties] = useState<Property[]>([]);
+    const [emailConfirmed, setEmailConfirmed] = useState(true);
     // Track connection to auto-open after OAuth redirect
     const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
 
@@ -240,6 +241,11 @@ function ConnectionsSettingsPageInner() {
 
     // Fetch Initial Data
     useEffect(() => {
+        const checkEmail = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user && !user.email_confirmed_at) setEmailConfirmed(false);
+        };
+        checkEmail();
         fetchData();
     }, []);
 
@@ -595,6 +601,21 @@ function ConnectionsSettingsPageInner() {
                     </button>
                 </header>
 
+                {/* Email Warning */}
+                {!emailConfirmed && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
+                        <svg className="w-5 h-5 text-yellow-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <div>
+                            <p className="font-medium text-yellow-800">Email not verified</p>
+                            <p className="text-sm text-yellow-700 mt-1">
+                                You must verify your email address to connect external accounts.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
                 {loading ? (
                     <div className="p-12 text-center text-gray-400">Loading...</div>
                 ) : connections.length === 0 ? (
@@ -698,7 +719,8 @@ function ConnectionsSettingsPageInner() {
                                             // Not connected / needs reconnect - show Connect/Reconnect button
                                             <button
                                                 onClick={() => handleConnectGmail(cx.id)}
-                                                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap"
+                                                disabled={!emailConfirmed}
+                                                className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 shadow-sm transition-colors whitespace-nowrap disabled:opacity-50"
                                             >
                                                 {cx.gmail_status === 'error' || cx.gmail_status === 'needs_reconnect' || cx.gmail_status === 'disconnected' ? 'Reconnect' : 'Connect Gmail'}
                                             </button>

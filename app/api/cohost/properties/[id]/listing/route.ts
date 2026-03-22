@@ -155,6 +155,12 @@ export async function PUT(
     
     // If enabling direct booking, validate requirements (enforcing slug too)
     if (body.direct_booking_enabled) {
+      if (!user.email_confirmed_at) {
+        return NextResponse.json({ 
+          error: 'Please verify your email address to publish a direct booking page.' 
+        }, { status: 403 });
+      }
+
       const { data: workspace } = await supabase
         .from('cohost_workspaces')
         .select('stripe_onboarding_complete')
