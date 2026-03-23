@@ -667,9 +667,9 @@ function NewPropertyWizardInner() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                         <div>
-                            <p className="text-sm text-blue-800 font-medium">Import Mode (Preview)</p>
+                            <p className="text-sm text-blue-800 font-medium">Import Active</p>
                             <p className="text-sm text-blue-600 mt-1">
-                                We see you want to import from <strong>{importUrl}</strong>. For now, please complete the wizard manually. Auto-fill coming soon!
+                                We're importing details from <strong>{importUrl}</strong>. Please review the pre-filled information below for accuracy before proceeding.
                             </p>
                         </div>
                     </div>

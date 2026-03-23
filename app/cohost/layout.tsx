@@ -143,6 +143,26 @@ export default function CohostLayout({
   return (
     <>
       <GmailAlertBanner />
+      {user && !user.email_confirmed_at && (
+        <div className="bg-yellow-500 text-yellow-900 px-4 py-3 text-sm flex items-center justify-center gap-4 font-medium z-[100] relative">
+          <span>Please check your inbox to verify your email address. Some features are restricted until you're verified.</span>
+          <button 
+            onClick={async () => {
+              if (user.email) {
+                const { error } = await supabase.auth.resend({ type: 'signup', email: user.email });
+                if (error) {
+                  alert('Error sending email: ' + error.message);
+                } else {
+                  alert('Verification email resent! Check your inbox (and spam folder).');
+                }
+              }
+            }}
+            className="underline hover:text-yellow-800"
+          >
+            Resend Email
+          </button>
+        </div>
+      )}
       <style jsx global>{`
         /* Hide the global Naviverse navbar when inside cohost routes */
         body > nav {
