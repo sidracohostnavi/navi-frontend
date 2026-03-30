@@ -173,7 +173,6 @@ export class ICalProcessor {
                             .select('id')
                             .eq('workspace_id', workspaceId)
                             .eq('property_id', feed.property_id)
-                            .eq('is_active', true)
                             .eq('check_in', `${inDateStr}T12:00:00.000Z`)
                             .eq('check_out', `${outDateStr}T12:00:00.000Z`)
                             .limit(1)
@@ -221,7 +220,6 @@ export class ICalProcessor {
                             platform: icalPayload.platform,
                             raw_data: icalPayload.raw_data,
                             last_synced_at: icalPayload.last_synced_at,
-                            source_feed_id: icalPayload.source_feed_id,
                             is_active: icalPayload.is_active
                         })
                         .eq('id', targetBooking.id);
@@ -244,37 +242,9 @@ export class ICalProcessor {
                 }
             }
 
-            // 5.5 Post-Sync Reconciliation (Deactivate bookings not in feed anymore)
-            let deactivatedCount = 0;
-            try {
-                const uidArray = Array.from(currentCanonicalUids);
-                
-                let deactivateQuery = supabase
-                    .from('bookings')
-                    .update({ is_active: false })
-                    .eq('workspace_id', workspaceId)
-                    .eq('property_id', feed.property_id)
-                    .eq('source_feed_id', feed.id)
-                    .eq('is_active', true);
-
-                if (uidArray.length > 0) {
-                    // Filter out the UIDs that we just saw.
-                    // Replace commas in UIDs to avoid breaking the PostgREST list syntax, just in case.
-                    const safeUidsStr = uidArray.map(u => u.replace(/,/g, '')).join(',');
-                    deactivateQuery = deactivateQuery.not('external_uid', 'in', `(${safeUidsStr})`);
-                }
-
-                const { data: deactivatedBookings, error: deactivateError } = await deactivateQuery.select('id');
-
-                if (deactivateError) {
-                    console.error(`[ICalProcessor] Deactivation Error | Feed: ${feed.id} | Err:`, deactivateError.message);
-                } else if (deactivatedBookings && deactivatedBookings.length > 0) {
-                    deactivatedCount = deactivatedBookings.length;
-                    console.log(`[ICalProcessor] Reconciled: Deactivated ${deactivatedCount} stale bookings for Feed ${feed.id}`);
-                }
-            } catch (err) {
-                console.error(`[ICalProcessor] Exception during reconciliation | Feed: ${feed.id} | Err:`, err);
-            }
+            // 5.5 Post-Sync Reconciliation
+            // TEMPORARILY DISABLED (2026-03-30) to restore calendar integrity.
+            // A separate cleanup sweep is required to handle cross-feed chimera bookings before enabling feed-scoped deactivation.
 
             // 6. Update Feed Status (Success)
             const { count: activeBookingCount } = await supabase
