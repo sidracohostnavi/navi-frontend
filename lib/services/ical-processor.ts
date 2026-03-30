@@ -109,6 +109,7 @@ export class ICalProcessor {
             eventCount = veventCount;
 
             // 3. Process Events
+            const currentCanonicalUids = new Set<string>();
             for (const [uid, event] of Object.entries(events) as [string, any][]) {
                 if (event.type !== 'VEVENT') continue;
                 feedEventsFound++;
@@ -120,6 +121,7 @@ export class ICalProcessor {
                 if (match && match[1]) {
                     canonicalUid = match[1];
                 }
+                currentCanonicalUids.add(canonicalUid);
 
                 // Date Parsing — normalize to noon UTC
                 const toNoonUTC = (d: Date) => new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0));
@@ -240,6 +242,38 @@ export class ICalProcessor {
                 } else if (isChange) {
                     totalUpdated++;
                 }
+            }
+
+            // 5.5 Post-Sync Reconciliation (Deactivate bookings not in feed anymore)
+            let deactivatedCount = 0;
+            try {
+                const uidArray = Array.from(currentCanonicalUids);
+                
+                let deactivateQuery = supabase
+                    .from('bookings')
+                    .update({ is_active: false })
+                    .eq('workspace_id', workspaceId)
+                    .eq('property_id', feed.property_id)
+                    .eq('source_feed_id', feed.id)
+                    .eq('is_active', true);
+
+                if (uidArray.length > 0) {
+                    // Filter out the UIDs that we just saw.
+                    // Replace commas in UIDs to avoid breaking the PostgREST list syntax, just in case.
+                    const safeUidsStr = uidArray.map(u => u.replace(/,/g, '')).join(',');
+                    deactivateQuery = deactivateQuery.not('external_uid', 'in', `(${safeUidsStr})`);
+                }
+
+                const { data: deactivatedBookings, error: deactivateError } = await deactivateQuery.select('id');
+
+                if (deactivateError) {
+                    console.error(`[ICalProcessor] Deactivation Error | Feed: ${feed.id} | Err:`, deactivateError.message);
+                } else if (deactivatedBookings && deactivatedBookings.length > 0) {
+                    deactivatedCount = deactivatedBookings.length;
+                    console.log(`[ICalProcessor] Reconciled: Deactivated ${deactivatedCount} stale bookings for Feed ${feed.id}`);
+                }
+            } catch (err) {
+                console.error(`[ICalProcessor] Exception during reconciliation | Feed: ${feed.id} | Err:`, err);
             }
 
             // 6. Update Feed Status (Success)
