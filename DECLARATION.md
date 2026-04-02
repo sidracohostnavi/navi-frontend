@@ -67,8 +67,14 @@ Deleting a property deletes all children (bookings, ical_feeds, tasks, settings)
 ### Law 11 — Booking Deactivation is Restricted
 A booking may only be set to `is_active = false` when the iCal feed explicitly removes the event — meaning the UID is no longer present in the feed on a subsequent sync. No other condition may deactivate a booking. Deactivation must be logged. Never deactivate a booking based on date overlap, duplicate detection, or any heuristic. If a booking disappears from a feed, verify the UID is truly absent before deactivating.
 
-### Law 12 — Multi-Feed Canonical Ownership
-When multiple iCal feeds (Lodgify, Spark & Stay, Sidra A/C) report the same stay for the same property, exactly ONE booking record must exist. The first feed to create the booking owns the `external_uid` and `source_feed_id`. Subsequent feeds matching by date may only update `guest_name` if currently masked. They may never change `check_in`, `check_out`, `property_id`, or `external_uid`. The canonical ownership does not transfer between feeds after creation.
+### Law 12 — Multi-Feed Canonical Ownership ⭐ ENFORCED
+When multiple iCal feeds (Lodgify, Spark & Stay, Sidra A/C) report the same stay for the same property, exactly ONE booking record must exist. The first feed to create the booking owns the `external_uid` and `source_feed_id`. Subsequent feeds matching by date follow a "richer data wins" rule:
+
+- **Canonical owner** → full update (all iCal fields)
+- **Non-owner with richer data** (has `/details/` URL in description, existing doesn't) → upgrades `raw_data` and transfers `source_feed_id`
+- **Non-owner with equal/poorer data** → only touches `last_synced_at`
+
+This prevents Lodgify block events from overwriting Airbnb reservation URLs in `raw_data`, which contain the confirmation codes needed for enrichment matching.
 
 ### Law 13 — Cleaning Blocks Are Not Guest Bookings
 Policy-enabled properties have Airbnb automatically insert cleaning blocks before check-in and after checkout. These appear in iCal feeds as "Airbnb (Not available)" events. They have **no confirmation code** in their description, so they are automatically excluded from enrichment matching. They are displayed on the calendar with visual distinction but never enriched.
@@ -145,6 +151,7 @@ Before inserting a new `reservation_fact`, check if one with the same `confirmat
 - Writes ONLY: `guest_name`, `check_in`, `check_out`, `external_uid`, `raw_data`, `platform`, `status`, `last_synced_at`
 - NEVER touches: `enriched_guest_name`, `enriched_guest_count`, `enriched_connection_id`, `enriched_at`
 - Lookup order: `external_uid + property_id` first, then exact date match
+- **Law 12 Guard:** On update, checks `source_feed_id` for canonical ownership. Non-owner feeds cannot overwrite `raw_data` unless their data is richer (contains `/details/` URL)
 - No enrichment logic — that's email-processor's job
 
 **`email-processor.ts → enrichBookings()`:**
@@ -157,6 +164,8 @@ Before inserting a new `reservation_fact`, check if one with the same `confirmat
 - Classify first → only `reservation_confirmation` proceeds to parse
 - Always stores raw to `gmail_messages` regardless of classification
 - Idempotent: checks `confirmation_code` before inserting facts (Law 18)
+- Orphan sweep: re-processes `gmail_messages` with `processed_at IS NULL`
+- **Confirmation code extraction order:** (A) Airbnb `HM` pattern in body, (B) Lodgify `#CODE` in subject, (C) Generic prefix anchor (`Confirmation code`, `Reservation ID`, `BOOKING`) in body
 
 **`email-classifier.ts`:**
 - Pure deterministic regex — no AI, no external calls, no side effects

@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — Navi CoHost System Architecture
-**Version:** 2.0  
-**Last Updated:** 2026-03-22  
+**Version:** 2.1  
+**Last Updated:** 2026-04-02  
 **Purpose:** Complete technical reference for onboarding new sessions and developers
 
 ---
@@ -439,6 +439,11 @@ Trigger: cron-job.org → /api/cron/refresh (every 2 min)
 
 Writes: guest_name, check_in, check_out, external_uid, raw_data, source='ical'
 Never touches: enriched_* columns, direct booking columns
+
+Multi-feed guard (Law 12):
+  - Canonical owner → full update
+  - Non-owner with richer data (has /details/ URL) → upgrades raw_data + transfers ownership
+  - Non-owner with equal/poorer data → only touches last_synced_at
 ```
 
 ### Flow 2: Gmail Enrichment
@@ -454,8 +459,9 @@ Never touches: enriched_* columns, direct booking columns
 
 Trigger: cron-job.org → /api/cron/enrichment (every 2 min)
 
-Step 1: Fetch emails from Gmail label
-Step 2: Parse confirmation emails → create reservation_facts
+Step 1: Fetch emails from Gmail label (+ orphan sweep for processed_at IS NULL)
+Step 2: Parse confirmation emails → extract code → create reservation_facts
+        Code extraction order: (A) Airbnb HM-pattern, (B) Lodgify #CODE, (C) Generic prefix
 Step 3: Match fact.confirmation_code to booking.raw_data.description
 Step 4: Write enriched_guest_name, enriched_guest_count, enriched_connection_id
 
