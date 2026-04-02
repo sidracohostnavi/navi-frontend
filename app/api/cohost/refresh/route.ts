@@ -67,11 +67,9 @@ export async function POST() {
 
                     // Run enrichment
                     const enrichRes = await EmailProcessor.enrichBookings(conn.id);
-                    const reprocessRes = await EmailProcessor.reprocessGmailToReview(conn.id);
 
                     totalEnriched += enrichRes.enriched;
                     totalMissing += enrichRes.missing;
-                    totalReviewItems += reprocessRes.review_items_created;
 
                     const durationMs = Date.now() - startTime;
 
@@ -81,13 +79,11 @@ export async function POST() {
                             .from('enrichment_logs')
                             .update({
                                 status: 'success',
-                                emails_processed: reprocessRes.messages_scanned,
+                                emails_processed: 0,
                                 bookings_updated: enrichRes.enriched,
                                 details: JSON.stringify({
                                     enriched: enrichRes.enriched,
                                     missing_detected: enrichRes.missing,
-                                    review_items_created: reprocessRes.review_items_created,
-                                    reservations_parsed: reprocessRes.reservations_parsed,
                                     duration_ms: durationMs
                                 })
                             })
