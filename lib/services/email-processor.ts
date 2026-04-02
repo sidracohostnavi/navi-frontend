@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getGoogleOAuthClient } from '@/lib/utils/google';
 import { google } from 'googleapis';
 import { classifyEmail } from '@/lib/services/email-classifier';
+import { GmailService } from '@/lib/services/gmail-service';
 
 type ExtractedFact = {
     check_in: string;
@@ -24,25 +25,17 @@ export class EmailProcessor {
         console.log(`[EmailProcessor] Connection ID: ${connectionId}`);
         console.log(`[EmailProcessor] Target Label: ${label}`);
 
-        const { data: connection } = await supabase
-            .from('connections')
-            .select('gmail_refresh_token')
-            .eq('id', connectionId)
-            .single();
+        const { success, gmail, error } = await GmailService.createAuthenticatedClient(connectionId, supabase);
 
-        if (!connection?.gmail_refresh_token) {
-            console.warn(`[EmailProcessor] ❌ No Gmail token for connection ${connectionId}`);
+        if (!success || !gmail) {
+            console.warn(`[EmailProcessor] ❌ Auth failed for connection ${connectionId}: ${error}`);
             return [];
         }
-
-        const oauth2Client = getGoogleOAuthClient();
-        oauth2Client.setCredentials({ refresh_token: connection.gmail_refresh_token });
-        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
         // 1. Resolve Label ID from Name
         const labelsRes = await gmail.users.labels.list({ userId: 'me' });
         const labels = labelsRes.data.labels || [];
-        const targetLabel = labels.find(l => l.name?.toLowerCase() === label.toLowerCase());
+        const targetLabel = labels.find((l: any) => l.name?.toLowerCase() === label.toLowerCase());
 
         if (!targetLabel?.id) {
             console.warn(`[EmailProcessor] ❌ Label "${label}" not found in Gmail account.`);
@@ -239,10 +232,22 @@ export class EmailProcessor {
             // 0. PRE-FLIGHT: Label Conflict Check
             await this.checkForLabelConflict(supabase, connectionId, label);
 
-            msgsToProcess = await this.fetchGmailMessages(connectionId, label, supabase);
+            // 1. Fetch fresh new emails from Google
+            const fetchedMsgs = await this.fetchGmailMessages(connectionId, label, supabase);
+            
+            // 2. Fetch orphaned/aborted emails natively stuck in the local database
+            const { data: orphanedMsgs } = await supabase
+                .from('gmail_messages')
+                .select('raw_metadata')
+                .eq('connection_id', connectionId)
+                .is('processed_at', null);
+
+            const orphanedFormatted = orphanedMsgs ? orphanedMsgs.map((m: any) => m.raw_metadata?.original_msg).filter(Boolean) : [];
+            
+            msgsToProcess = [...fetchedMsgs, ...orphanedFormatted];
         }
 
-        console.log(`[EmailProcessor] Processing ${msgsToProcess.length} messages`);
+        console.log(`[EmailProcessor] Processing ${msgsToProcess.length} total messages`);
 
         let stats = {
             scanned: 0,
@@ -362,56 +367,57 @@ export class EmailProcessor {
                 continue;
             }
 
+            // Smart-Save Logic: Find any existing fact securely to enable idempotent healing
             const { data: existingFact } = await supabase
                 .from('reservation_facts')
                 .select('id')
                 .eq('source_gmail_message_id', sourceGmailId)
-                .single();
+                .maybeSingle();
 
-            if (existingFact) {
-                console.log(`[EmailProcessor] Fact already exists for ${sourceGmailId}, skipping insert.`);
-                await supabase.from('gmail_messages').update({ processed_at: new Date().toISOString() }).eq('gmail_message_id', sourceGmailId);
-                continue;
-            }
-
-            // DUPLICATE PREVENTION: Check if fact with same confirmation code already exists
-            if (fact.confirmation_code && fact.confirmation_code.length >= 6) {
-                const { data: existingCodeFact } = await supabase
+            let existingCodeFactId = null;
+            if (!existingFact && fact.confirmation_code && fact.confirmation_code.length >= 6) {
+                const { data: codeFact } = await supabase
                     .from('reservation_facts')
                     .select('id')
                     .eq('connection_id', connectionId)
                     .eq('confirmation_code', fact.confirmation_code)
                     .limit(1)
                     .maybeSingle();
-
-                if (existingCodeFact) {
-                    console.log(`[EmailProcessor] Fact with code ${fact.confirmation_code} already exists, skipping`);
-                    await supabase.from('gmail_messages').update({ processed_at: new Date().toISOString() }).eq('gmail_message_id', sourceGmailId);
-                    continue;
-                }
+                
+                if (codeFact) existingCodeFactId = codeFact.id;
             }
 
-            const { error: factError } = await supabase
-                .from('reservation_facts')
-                .upsert({
-                    source_gmail_message_id: sourceGmailId,
-                    connection_id: connectionId,
-                    check_in: fact.check_in,
-                    check_out: fact.check_out,
-                    guest_name: fact.guest_name,
-                    guest_count: fact.guest_count,
-                    confirmation_code: fact.confirmation_code,
-                    listing_name: fact.listing_name,
-                    confidence: fact.confidence,
-                    raw_data: fact.raw
-                }, { onConflict: 'connection_id, source_gmail_message_id' });
+            const targetFactId = existingFact ? existingFact.id : existingCodeFactId;
+
+            const factPayload = {
+                source_gmail_message_id: sourceGmailId,
+                connection_id: connectionId,
+                check_in: fact.check_in,
+                check_out: fact.check_out,
+                guest_name: fact.guest_name,
+                guest_count: fact.guest_count,
+                confirmation_code: fact.confirmation_code,
+                listing_name: fact.listing_name,
+                confidence: fact.confidence,
+                raw_data: fact.raw
+            };
+
+            let factError;
+            if (targetFactId) {
+                // Auto-Heal: Safely overwrite the old fact with the newly patched data
+                const { error } = await supabase.from('reservation_facts').update(factPayload).eq('id', targetFactId);
+                factError = error;
+            } else {
+                // Standard: Safely insert the virgin payload
+                const { error } = await supabase.from('reservation_facts').insert(factPayload);
+                factError = error;
+            }
 
             if (factError) {
                 console.error(`[EmailProcessor] Error storing fact:`, factError);
             } else {
-                stats.facts_created++;
+                if (!targetFactId) stats.facts_created++;
                 await supabase.from('gmail_messages').update({ processed_at: new Date().toISOString() }).eq('gmail_message_id', sourceGmailId);
-                // console.log(`[EmailProcessor] ✅ Fact Upserted: ${fact.guest_name} (${fact.check_in})`);
             }
         }
 
@@ -1094,15 +1100,31 @@ export class EmailProcessor {
             }
 
             // =====================================================================
-            // 5. CONFIRMATION CODE (unchanged)
+            // 5. CONFIRMATION CODE
             // =====================================================================
             let confirmation_code = '';
-            const lodgifyCode = subject.match(/#([A-Z0-9]{8,15})/i);
-            if (lodgifyCode) {
-                confirmation_code = lodgifyCode[1];
-            } else {
-                const codeMatch = body.match(/(?:Confirmation code|Reservation ID|BOOKING).*?([A-Z0-9]{8,15})/i);
-                if (codeMatch) confirmation_code = codeMatch[1];
+
+            // Method A: Airbnb HM-code (specific pattern, checked first)
+            const airbnbCode = body.match(/\b(HM[A-Z0-9]{6,12})\b/);
+            if (airbnbCode) {
+                confirmation_code = airbnbCode[1];
+            }
+
+            // Method B: Lodgify subject pattern (#CODE)
+            if (!confirmation_code) {
+                const lodgifyCode = subject.match(/#([A-Z0-9]{8,15})/i);
+                if (lodgifyCode) confirmation_code = lodgifyCode[1];
+            }
+
+            // Method C: Generic prefix anchor (fallback)
+            if (!confirmation_code) {
+                const prefixRegex = /(?:Confirmation code|Reservation ID|BOOKING)/i;
+                const prefixMatch = body.match(prefixRegex);
+                if (prefixMatch && typeof prefixMatch.index === 'number') {
+                    const textAfter = body.substring(prefixMatch.index + prefixMatch[0].length);
+                    const codeMatch = textAfter.match(/([A-Z0-9]{8,15})/);
+                    if (codeMatch) confirmation_code = codeMatch[1];
+                }
             }
 
             // NOTE: Airbnb checkout offset (+1 day) was previously applied here

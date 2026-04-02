@@ -152,7 +152,7 @@ export class ICalProcessor {
                     // Primary lookup: external_uid + property_id
                     const { data: uidMatch } = await supabase
                         .from('bookings')
-                        .select('id')
+                        .select('id, source_feed_id, raw_data')
                         .eq('workspace_id', workspaceId)
                         .eq('property_id', feed.property_id)
                         .eq('external_uid', canonicalUid)
@@ -170,7 +170,7 @@ export class ICalProcessor {
 
                         const { data: dateMatch } = await supabase
                             .from('bookings')
-                            .select('id')
+                            .select('id, source_feed_id, raw_data')
                             .eq('workspace_id', workspaceId)
                             .eq('property_id', feed.property_id)
                             .eq('check_in', `${inDateStr}T12:00:00.000Z`)
@@ -208,23 +208,58 @@ export class ICalProcessor {
                 let isChange = false;
 
                 if (targetBooking) {
-                    // UPDATE existing booking — never touch enrichment columns
-                    const { error } = await supabase
-                        .from('bookings')
-                        .update({
-                            check_in: icalPayload.check_in,
-                            check_out: icalPayload.check_out,
-                            guest_name: icalPayload.guest_name,
-                            guest_count: icalPayload.guest_count,
-                            status: icalPayload.status,
-                            platform: icalPayload.platform,
-                            raw_data: icalPayload.raw_data,
-                            last_synced_at: icalPayload.last_synced_at,
-                            is_active: icalPayload.is_active
-                        })
-                        .eq('id', targetBooking.id);
-                    bookingError = error;
-                    isChange = !error;
+                    // UPDATE existing booking — Law 12: Canonical Ownership Guard
+                    const isCanonicalOwner = targetBooking.source_feed_id === feed.id;
+
+                    // Check if existing raw_data has a reservation URL (richer data)
+                    const existingDesc = targetBooking.raw_data?.description || '';
+                    const newDesc = sanitizedRawData?.description || '';
+                    const existingHasCode = existingDesc.includes('/details/');
+                    const newHasCode = newDesc.includes('/details/');
+
+                    if (isCanonicalOwner) {
+                        // Full update — this feed owns the booking
+                        const { error } = await supabase
+                            .from('bookings')
+                            .update({
+                                check_in: icalPayload.check_in,
+                                check_out: icalPayload.check_out,
+                                guest_name: icalPayload.guest_name,
+                                guest_count: icalPayload.guest_count,
+                                status: icalPayload.status,
+                                platform: icalPayload.platform,
+                                raw_data: icalPayload.raw_data,
+                                last_synced_at: icalPayload.last_synced_at,
+                                is_active: icalPayload.is_active
+                            })
+                            .eq('id', targetBooking.id);
+                        bookingError = error;
+                        isChange = !error;
+                    } else if (!existingHasCode && newHasCode) {
+                        // Non-owner BUT richer data — upgrade (Law 12: richer data wins)
+                        const { error } = await supabase
+                            .from('bookings')
+                            .update({
+                                raw_data: icalPayload.raw_data,
+                                source_feed_id: feed.id,
+                                guest_name: icalPayload.guest_name,
+                                platform: icalPayload.platform,
+                                last_synced_at: icalPayload.last_synced_at,
+                                is_active: true
+                            })
+                            .eq('id', targetBooking.id);
+                        bookingError = error;
+                        isChange = !error;
+                        if (!error) console.log(`[ICalProcessor] Upgraded booking ${targetBooking.id} with richer data from feed ${feed.id}`);
+                    } else {
+                        // Non-owner, existing data is equal or richer — only touch last_synced_at
+                        const { error } = await supabase
+                            .from('bookings')
+                            .update({ last_synced_at: new Date().toISOString(), is_active: true })
+                            .eq('id', targetBooking.id);
+                        bookingError = error;
+                        // Not counted as a change (no data changed)
+                    }
                 } else {
                     // INSERT new booking
                     const { error } = await supabase
