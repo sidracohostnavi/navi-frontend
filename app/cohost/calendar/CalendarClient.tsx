@@ -963,65 +963,31 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
           setSelectionEnd(date);
         }
       }}
-      onMouseDown={(e) => {
-        if (userRole === 'cleaner') return;
-        
-        const dateIsInsideBooking = allPropertyBookings.some(booking => {
-          const bookingStart = parseDateOnly(booking.startDate);
-          const bookingEnd = parseDateOnly(booking.endDate);
-          return date >= bookingStart && date < bookingEnd;
-        });
-        
-        if (dateIsInsideBooking) return;
-        
-        setHoveredBooking(null);
-        setContextMenu(null);
-        setIsSelecting(true);
-        setSelectionStart({ propertyId: property.id, date });
-        setSelectionEnd(date);
-      }}
-      onMouseUp={(e) => {
-        if (isSelecting && selectionStart) {
-          const start = selectionStart.date < selectionEnd! ? selectionStart.date : selectionEnd!;
-          const end = selectionStart.date < selectionEnd! ? selectionEnd! : selectionStart.date;
-          
-          const startIsBlocked = allPropertyBookings.some(booking => {
-            const bookingStart = parseDateOnly(booking.startDate);
-            const bookingEnd = parseDateOnly(booking.endDate);
-            return start >= bookingStart && start < bookingEnd;
-          });
-          
-          if (startIsBlocked) {
+      onClick={(e) => {
+        if (userRole === 'cleaner' || isBooked) return;
+
+        if (!isSelecting) {
+          // First click: Start selection
+          setHoveredBooking(null);
+          setContextMenu(null);
+          setIsSelecting(true);
+          setSelectionStart({ propertyId: property.id, date });
+          setSelectionEnd(date);
+        } else {
+          // Second click: Finalize or Switch
+          if (selectionStart?.propertyId === property.id) {
+            // Finalize on same row
+            const start = selectionStart.date <= date ? selectionStart.date : date;
+            const end = selectionStart.date <= date ? date : selectionStart.date;
+            setContextMenu({ x: e.clientX, y: e.clientY, propertyId: property.id, startDate: start, endDate: end });
             setIsSelecting(false);
             setSelectionStart(null);
             setSelectionEnd(null);
-            return;
+          } else {
+            // Clicked different row: Restart selection there
+            setSelectionStart({ propertyId: property.id, date });
+            setSelectionEnd(date);
           }
-          
-          const hasOverlap = allPropertyBookings.some(booking => {
-            const bStart = parseDateOnly(booking.startDate);
-            const bEnd = parseDateOnly(booking.endDate);
-            return start < bEnd && end > bStart;
-          });
-          
-          if (hasOverlap) {
-            setIsSelecting(false);
-            setSelectionStart(null);
-            setSelectionEnd(null);
-            return;
-          }
-          
-          setContextMenu({
-            x: e.clientX,
-            y: e.clientY,
-            propertyId: selectionStart.propertyId,
-            startDate: start,
-            endDate: end,
-          });
-          
-          setIsSelecting(false);
-          setSelectionStart(null);
-          setSelectionEnd(null);
         }
       }}
     >
