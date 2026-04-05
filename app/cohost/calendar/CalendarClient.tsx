@@ -7,6 +7,10 @@ import Link from 'next/link';
 import { getPermissionsForRole, type FeaturePermissions } from '@/lib/roles/roleConfig';
 import DateSelectionMenu from './components/DateSelectionMenu';
 import CreateQuoteModal from './components/CreateQuoteModal';
+import BookingDetailModal from './components/BookingDetailModal';
+import CreateBlockModal from './components/CreateBlockModal';
+import CreateInstantBookingModal from './components/CreateInstantBookingModal';
+import ChangePriceModal from './components/ChangePriceModal';
 
 import {
   HomeIcon,
@@ -46,7 +50,7 @@ type Booking = {
   guestCount?: number;
   startDate: string; // ISO YYYY-MM-DD
   endDate: string;   // ISO YYYY-MM-DD
-  status: 'confirmed' | 'pending';
+  status: 'confirmed' | 'pending' | 'cancelled';
   totalPrice: number;
   channel: Channel;
   platform?: string; // Human Readable (e.g. "Spark & Stay")
@@ -100,7 +104,12 @@ MAX_DATE.setDate(1); // Start of that month
 
 
 // --- Helpers ---
-const toIso = (d: Date) => d.toISOString().split('T')[0];
+const toIso = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 const addDays = (d: Date, days: number) => {
   const newDate = new Date(d);
   newDate.setDate(newDate.getDate() + days);
@@ -265,6 +274,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [properties, setProperties] = useState<Property[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [holds, setHolds] = useState<any[]>([]);
+  const [datePricing, setDatePricing] = useState<Map<string, number>>(new Map());
 
 
 
@@ -281,6 +291,8 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; propertyId: string; startDate: Date; endDate: Date } | null>(null);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
   const [showBlockModal, setShowBlockModal] = useState(false);
+  const [showInstantBookingModal, setShowInstantBookingModal] = useState(false);
+  const [showPriceModal, setShowPriceModal] = useState(false);
 
   // ADD: Persisted selection for modals (doesn't clear when context menu closes)
   const [modalSelection, setModalSelection] = useState<{
@@ -304,6 +316,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         setSelectionEnd(null);
         setShowQuoteModal(false);
         setShowBlockModal(false);
+        setShowInstantBookingModal(false);
         setModalSelection(null);
       }
     };
@@ -322,6 +335,9 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     guestCount: '1'
   });
   const [savingResolution, setSavingResolution] = useState(false);
+
+  // Phase 6: Booking detail state
+  const [selectedBooking, setSelectedBooking] = useState<any>(null);
 
   // Tooltip portal state: tracks which booking is hovered and its position
   const [hoveredBooking, setHoveredBooking] = useState<{ booking: Booking; rect: DOMRect; displayGuestName: string; displayGuestCount: number; labelText: string; above: boolean } | null>(null);
@@ -382,6 +398,30 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     }
   }, []);
 
+  // Fetch Date Pricing Helper
+  const fetchDatePricing = useCallback(async () => {
+    try {
+      // Fetch range from 1 month ago to 6 months out
+      const startDateStr = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().split('T')[0];
+      const endDateStr = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
+      
+      const res = await fetch(
+        `/api/cohost/pricing/dates?startDate=${startDateStr}&endDate=${endDateStr}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const map = new Map<string, number>();
+        data.forEach((d: any) => {
+          // Key: propertyId-date
+          map.set(`${d.property_id}-${d.date}`, d.nightly_rate);
+        });
+        setDatePricing(map);
+      }
+    } catch (e) {
+      console.error('Failed to fetch date pricing:', e);
+    }
+  }, []);
+
   // Initial Fetch (Properties + Feeds + First 45 Days)
   const fetchInitialData = useCallback(async (startPoint: Date) => {
     try {
@@ -390,7 +430,8 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
       // 1. Fetch Feeds & Holds
       await Promise.all([
         fetchFeeds(),
-        fetchHolds()
+        fetchHolds(),
+        fetchDatePricing()
       ]);
 
       // 2. Fetch Properties (only if empty)
@@ -405,9 +446,15 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         const mappedProps: Property[] = (propsData || []).map(p => ({
           id: p.id,
           name: p.name,
-          image: p.image_url
+          image: p.image_url,
+          base_nightly_rate: p.base_nightly_rate,
+          base_guests_included: p.base_guests_included,
+          extra_guest_fee: p.extra_guest_fee,
+          min_nights: p.min_nights,
+          max_guests: p.max_guests,
+          workspace_id: p.workspace_id,
+          color: p.color
         }));
-        console.log(`[Calendar DEBUG] Loaded ${mappedProps.length} properties:`, mappedProps.map(p => ({ id: p.id, name: p.name })));
         setProperties(mappedProps);
 
         // 3. Fetch Earliest Date for Bound
@@ -463,10 +510,10 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     } finally {
       setLoading(false);
     }
-  }, [supabase, fetchFeeds, properties.length, setMinDate]); // properties.length dependency to avoid re-fetching props
+  }, [supabase, fetchFeeds, fetchHolds, setMinDate]); // removed properties.length to prevent loop
 
   // Fetch Bookings for a specific range and MERGE into state
-  const fetchBookingsRange = async (start: Date, end: Date) => {
+  const fetchBookingsRange = useCallback(async (start: Date, end: Date) => {
     const startStr = start.toISOString();
     const endStr = end.toISOString();
 
@@ -502,7 +549,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
       propertyId: b.property_id,
       startDate: b.check_in.split('T')[0],
       endDate: b.check_out.split('T')[0],
-      status: (b.status === 'confirmed' || b.status === 'pending') ? b.status : 'confirmed',
+      status: b.status as 'confirmed' | 'pending' | 'cancelled',
       totalPrice: b.total_amount || 0,
       channel: (['direct', 'airbnb', 'vrbo'].includes(b.source_type) ? b.source_type : 'other') as Channel,
       platform: b.platform || b.source_type,
@@ -556,12 +603,17 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     });
 
     setBookings(prev => {
-      // Merge and Deduplicate by ID
-      const existingIds = new Set(prev.map(b => b.id));
-      const newBookings = mappedBookings.filter(b => !existingIds.has(b.id));
-      return [...prev, ...newBookings];
+      // Create a map of existing bookings for quick lookup
+      const bookingMap = new Map(prev.map(b => [b.id, b]));
+      
+      // Update or add new bookings
+      mappedBookings.forEach(newItem => {
+        bookingMap.set(newItem.id, newItem);
+      });
+
+      return Array.from(bookingMap.values());
     });
-  };
+  }, [apiBase, setBookings, setProperties, setPropertyPolicies]);
 
   const loadMoreDays = useCallback(async () => {
     if (loadingMore || !rangeStart) return;
@@ -889,7 +941,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
           {/* Property Rows */}
           {gridReady && !loading && properties.filter(p => !!p.name).map((property, rowIdx, filteredProps) => {
             const gridRow = rowIdx + 2;
-            const allPropertyBookings = bookings.filter(b => b.propertyId === property.id);
+            const allPropertyBookings = bookings.filter(b => b.propertyId === property.id && b.status !== 'cancelled');
 
             // Direct render: one block per booking row, no grouping
             const propertyBookings = allPropertyBookings;
@@ -943,10 +995,12 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const isSameProp = isSelecting ? (selectionStart?.propertyId === property.id) : (contextMenu?.propertyId === property.id);
 
   const isInSelection = isSameProp && rangeStart && rangeEnd && (
-    (date >= rangeStart && date <= rangeEnd) || (date <= rangeStart && date >= rangeEnd)
+    isSelecting 
+      ? ((date >= rangeStart && date <= rangeEnd) || (date <= rangeStart && date >= rangeEnd))
+      : ((date >= rangeStart && date < rangeEnd) || (date < rangeStart && date >= rangeEnd))
   );
 
-  const isActiveCell = isSameProp && rangeEnd && date.getTime() === rangeEnd.getTime();
+  const isActiveCell = isSelecting && isSameProp && rangeEnd && date.getTime() === rangeEnd.getTime();
 
   return (
     <div
@@ -964,27 +1018,46 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         }
       }}
       onClick={(e) => {
-        if (userRole === 'cleaner' || isBooked) return;
-
+        if (userRole === 'cleaner') return;
+        
         if (!isSelecting) {
-          // First click: Start selection
+          // FIRST CLICK: Start selection
+          // Block if date is inside a booking
+          if (isBooked) return;
+          
           setHoveredBooking(null);
           setContextMenu(null);
           setIsSelecting(true);
           setSelectionStart({ propertyId: property.id, date });
           setSelectionEnd(date);
         } else {
-          // Second click: Finalize or Switch
+          // SECOND CLICK: Finalize or Switch
           if (selectionStart?.propertyId === property.id) {
             // Finalize on same row
             const start = selectionStart.date <= date ? selectionStart.date : date;
-            const end = selectionStart.date <= date ? date : selectionStart.date;
+            const lastCell = selectionStart.date <= date ? date : selectionStart.date;
+            
+            // End date is the day AFTER the last selected cell (for night-based logic)
+            const end = new Date(lastCell.getTime() + 86400000);
+            
+            // Range check: does selection intersect any booking?
+            const startStr = toIso(start);
+            const endStr = toIso(end);
+            const hasOverlap = allPropertyBookings.some(b => {
+              if (b.status === 'cancelled') return false;
+              // Standard interval check: start < b.end && end > b.start
+              return startStr < b.endDate && endStr > b.startDate;
+            });
+
+            if (hasOverlap) return; // Block the quote creation
+
             setContextMenu({ x: e.clientX, y: e.clientY, propertyId: property.id, startDate: start, endDate: end });
             setIsSelecting(false);
             setSelectionStart(null);
             setSelectionEnd(null);
           } else {
             // Clicked different row: Restart selection there
+            if (isBooked) return;
             setSelectionStart({ propertyId: property.id, date });
             setSelectionEnd(date);
           }
@@ -1002,11 +1075,27 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
       )}
 
       {/* Nightly Price Display */}
-      {!isBooked && property.base_nightly_rate && (userRole === 'owner' || userRole === 'manager' || userRole === 'admin') && (
-        <div className={`absolute top-1 right-1 text-[10px] font-medium pointer-events-none transition-colors ${isInSelection ? 'text-white' : 'text-gray-400 group-hover/cell:text-gray-600'}`}>
-          ${Math.round(property.base_nightly_rate)}
-        </div>
-      )}
+      {!isBooked && property.base_nightly_rate && (userRole === 'owner' || userRole === 'manager' || userRole === 'admin') && (() => {
+        const priceKey = `${property.id}-${dateStr}`;
+        const overridePrice = datePricing.get(priceKey);
+        const basePrice = property.base_nightly_rate; // This is already in dollars in the properties table
+        const hasOverride = overridePrice !== undefined;
+
+        return (
+          <div className={`absolute top-1 right-1 text-[10px] pointer-events-none transition-colors z-20 ${isInSelection ? 'text-white' : ''}`}>
+            {hasOverride ? (
+              <div className="flex flex-col items-end leading-tight">
+                <span className={`line-through ${isInSelection ? 'text-white/60' : 'text-gray-400'}`}>${Math.round(basePrice)}</span>
+                <span className={`font-bold ${isInSelection ? 'text-white' : 'text-teal-600'}`}>${Math.round(overridePrice / 100)}</span>
+              </div>
+            ) : (
+              <span className={`${isInSelection ? 'text-white' : 'text-gray-400 font-medium group-hover/cell:text-gray-600'}`}>
+                ${Math.round(basePrice)}
+              </span>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 })}
@@ -1229,10 +1318,9 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                           ${isActive ? 'ring-2 ring-blue-500 ring-offset-1 shadow-lg' : 'hover:scale-[1.02] active:scale-[0.98]'}
                         `}
                                 style={finalStyle}
-                                onClick={() => {
-                                  if (booking.channel === 'direct') {
-                                    router.push(`/cohost/bookings/${booking.id}`);
-                                  }
+                                onClick={(e) => {
+                                  e.stopPropagation(); // Prevent date selection
+                                  setSelectedBooking(booking);
                                 }}
                                 onMouseEnter={(e) => {
                                   if (!isEnriched && !isCleaner) return;
@@ -1405,7 +1493,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                 startDate: contextMenu.startDate,
                 endDate: contextMenu.endDate,
               });
-              setShowQuoteModal(true);
+              setShowInstantBookingModal(true);
               setContextMenu(null);
             }}
             onCreateClosedPeriod={() => {
@@ -1416,6 +1504,16 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                 endDate: contextMenu.endDate,
               });
               setShowBlockModal(true);
+              setContextMenu(null);
+            }}
+            onChangePrice={() => {
+              setModalSelection({
+                propertyId: contextMenu.propertyId,
+                propertyName: selectedProperty?.name || '',
+                startDate: contextMenu.startDate,
+                endDate: contextMenu.endDate,
+              });
+              setShowPriceModal(true);
               setContextMenu(null);
             }}
           />
@@ -1451,27 +1549,79 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
         />
       )}
 
-      {/* Block Modal Placeholder */}
       {showBlockModal && modalSelection && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]" onClick={() => { setShowBlockModal(false); setModalSelection(null); }}>
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold mb-4">Create Closed Period</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Property: {modalSelection.propertyName}<br />
-              Dates: {modalSelection.startDate.toLocaleDateString()} → {modalSelection.endDate.toLocaleDateString()}
-            </p>
-            <p className="text-sm text-gray-500 mb-4">(Full modal coming in Phase 3)</p>
-            <button 
-              onClick={() => {
-                setShowBlockModal(false);
-                setModalSelection(null);
-              }}
-              className="w-full px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
+        <CreateBlockModal
+          isOpen={showBlockModal}
+          onClose={() => {
+            setShowBlockModal(false);
+            setModalSelection(null);
+          }}
+          propertyId={modalSelection.propertyId}
+          propertyName={modalSelection.propertyName}
+          startDate={modalSelection.startDate}
+          endDate={modalSelection.endDate}
+          onSuccess={() => {
+            if (rangeStart) {
+              fetchInitialData(rangeStart);
+            }
+          }}
+        />
+      )}
+
+      {showInstantBookingModal && modalSelection && (
+        <CreateInstantBookingModal
+          isOpen={showInstantBookingModal}
+          onClose={() => {
+            setShowInstantBookingModal(false);
+            setModalSelection(null);
+          }}
+          propertyId={modalSelection.propertyId}
+          propertyName={modalSelection.propertyName}
+          startDate={modalSelection.startDate}
+          endDate={modalSelection.endDate}
+          properties={properties}
+          onSuccess={() => {
+            if (rangeStart) {
+              fetchInitialData(rangeStart);
+            }
+          }}
+        />
+      )}
+
+      {showPriceModal && modalSelection && (
+        <ChangePriceModal
+          isOpen={showPriceModal}
+          onClose={() => {
+            setShowPriceModal(false);
+            setModalSelection(null);
+          }}
+          propertyId={modalSelection.propertyId}
+          propertyName={modalSelection.propertyName}
+          startDate={modalSelection.startDate}
+          endDate={modalSelection.endDate}
+          currentBaseRate={properties.find(p => p.id === modalSelection.propertyId)?.base_nightly_rate || 0}
+          onSuccess={() => {
+            fetchDatePricing(); // Refresh prices
+          }}
+        />
+      )}
+
+      {selectedBooking && (
+        <BookingDetailModal
+          booking={selectedBooking}
+          onClose={() => setSelectedBooking(null)}
+          onCancelled={() => {
+            setSelectedBooking(null);
+            if (rangeStart) {
+              fetchInitialData(rangeStart);
+            }
+          }}
+          onUpdated={() => {
+            if (rangeStart) {
+              fetchInitialData(rangeStart);
+            }
+          }}
+        />
       )}
 
       {/* Portal Tooltip — rendered outside stacking contexts so it's always on top */}

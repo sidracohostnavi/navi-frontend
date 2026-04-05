@@ -13,6 +13,7 @@ interface DateSelectionMenuProps {
   onCreateQuote: () => void;
   onCreateReservation: () => void;
   onCreateClosedPeriod: () => void;
+  onChangePrice: () => void;
 }
 
 export default function DateSelectionMenu({
@@ -25,6 +26,7 @@ export default function DateSelectionMenu({
   onCreateQuote,
   onCreateReservation,
   onCreateClosedPeriod,
+  onChangePrice,
 }: DateSelectionMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   
@@ -58,26 +60,34 @@ export default function DateSelectionMenu({
       <div className="py-1">
         <button
           onClick={onCreateQuote}
-          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"
+          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 transition-colors"
         >
           <span className="text-lg">💰</span>
           <span className="text-sm font-medium text-gray-700">Create reservation with quote</span>
         </button>
-        
+
         <button
           onClick={onCreateReservation}
-          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"
+          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 transition-colors"
         >
           <span className="text-lg">📝</span>
           <span className="text-sm font-medium text-gray-700">Create reservation without quote</span>
         </button>
+
+        <button
+          onClick={onChangePrice}
+          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 transition-colors"
+        >
+          <span className="text-lg">🏷️</span>
+          <span className="text-sm font-medium text-gray-700">Change nightly rate</span>
+        </button>
         
         <button
           onClick={onCreateClosedPeriod}
-          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"
+          className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 transition-colors text-red-600"
         >
           <span className="text-lg">🚫</span>
-          <span className="text-sm font-medium text-gray-700">Create closed period</span>
+          <span className="text-sm font-medium">Create closed period</span>
         </button>
       </div>
     </div>

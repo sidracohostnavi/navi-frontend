@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { formatPrice } from '@/lib/services/pricing-service';
+import { COUNTRIES } from '@/lib/utils/countries';
 
 interface CreateQuoteModalProps {
   isOpen: boolean;
@@ -42,8 +43,8 @@ export default function CreateQuoteModal({
   const [guestLastName, setGuestLastName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
   const [guestPhone, setGuestPhone] = useState('');
-  const [guestCountry, setGuestCountry] = useState('');
-  const [guestLanguage, setGuestLanguage] = useState('English');
+  const [guestCountry, setGuestCountry] = useState('US');
+  const [sendEmail, setSendEmail] = useState(true);
 
   // Step 2: Price data (fetched)
   const [priceBreakdown, setPriceBreakdown] = useState<any>(null);
@@ -64,6 +65,7 @@ export default function CreateQuoteModal({
       setError(null);
       setCreatedHold(null);
       setCopied(false);
+      setSendEmail(true);
     }
   }, [isOpen, propertyId, startDate, endDate]);
 
@@ -158,10 +160,10 @@ export default function CreateQuoteModal({
           guestEmail,
           guestPhone,
           guestCountry,
-          guestLanguage,
           source,
           policyId: selectedPolicyId,
           sendQuote: true,
+          sendEmail: sendEmail && !!guestEmail,
         }),
       });
 
@@ -358,21 +360,9 @@ export default function CreateQuoteModal({
                     className="w-full border border-gray-300 rounded-lg px-4 py-3"
                   >
                     <option value="">Country</option>
-                    <option value="US">United States</option>
-                    <option value="CA">Canada</option>
-                    <option value="UK">United Kingdom</option>
-                    <option value="AU">Australia</option>
-                    {/* Add more countries as needed */}
-                  </select>
-                  <select
-                    value={guestLanguage}
-                    onChange={(e) => setGuestLanguage(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-4 py-3"
-                  >
-                    <option value="English">English</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="French">French</option>
-                    <option value="German">German</option>
+                    {COUNTRIES.map(c => (
+                      <option key={c.code} value={c.code}>{c.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -392,11 +382,32 @@ export default function CreateQuoteModal({
                       <span className="font-semibold text-gray-700">Room rate</span>
                       <span className="font-semibold">{formatPrice(priceBreakdown.roomTotal)}</span>
                     </div>
-                    <div className="text-sm text-gray-500 ml-4">
-                      {selectedProperty?.name}: {formatPrice(priceBreakdown.nightlyRate)}/night × {priceBreakdown.nights} nights
+                    
+                    {/* Show nightly breakdown if rates vary */}
+                    <div className="ml-4 space-y-1">
+                      {priceBreakdown.nightlyBreakdown && priceBreakdown.nightlyBreakdown.some((n: any) => n.isOverride) ? (
+                        // Rates vary - show each night
+                        priceBreakdown.nightlyBreakdown.map((night: any) => (
+                          <div key={night.date} className="flex justify-between text-sm">
+                            <span className={night.isOverride ? 'text-teal-600 font-medium' : 'text-gray-500'}>
+                              {new Date(night.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}
+                              {night.isOverride && ' ★'}
+                            </span>
+                            <span className={night.isOverride ? 'text-teal-600 font-medium' : 'text-gray-500'}>
+                              {formatPrice(night.rate)}
+                            </span>
+                          </div>
+                        ))
+                      ) : (
+                        // All same rate - show summary
+                        <div className="text-sm text-gray-500">
+                          {formatPrice(priceBreakdown.baseNightlyRate)}/night × {priceBreakdown.nights} nights
+                        </div>
+                      )}
                     </div>
+
                     {priceBreakdown.extraGuestsCount > 0 && (
-                      <div className="text-sm text-gray-500 ml-4 mt-1">
+                      <div className="text-sm text-gray-500 ml-4 mt-2">
                         Extra guests ({priceBreakdown.extraGuestsCount}): {formatPrice(priceBreakdown.extraGuestTotal)}
                       </div>
                     )}
@@ -530,6 +541,25 @@ export default function CreateQuoteModal({
                   </div>
                 </div>
               </div>
+
+              {/* Email Toggle */}
+              <div className="pt-4">
+                <label className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={sendEmail}
+                    disabled={!guestEmail}
+                    onChange={(e) => setSendEmail(e.target.checked)}
+                    className="w-5 h-5 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+                  />
+                  <div>
+                    <span className="block text-sm font-semibold text-gray-900">Email quote to guest</span>
+                    <span className="block text-xs text-gray-500">
+                      {guestEmail ? `Sends to ${guestEmail}` : 'Requires guest email (Step 1)'}
+                    </span>
+                  </div>
+                </label>
+              </div>
             </div>
           )}
 
@@ -580,8 +610,12 @@ export default function CreateQuoteModal({
                 </div>
               </div>
 
-              <div className="mt-auto pt-8 text-xs text-gray-400 font-medium">
-                A confirmation email has also been sent to {createdHold.guest_email || 'the host'}.
+              <div className="mt-auto pt-8 text-xs text-gray-400 font-medium italic">
+                {createdHold.emailSent 
+                  ? `✨ Confirmation email sent to ${createdHold.guest_email}` 
+                  : sendEmail && guestEmail 
+                    ? '⚠️ Email service was requested but could not be sent'
+                    : 'ℹ️ No email was sent (shared link only)'}
               </div>
             </div>
           )}
