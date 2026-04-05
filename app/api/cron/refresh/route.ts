@@ -122,6 +122,20 @@ export async function GET(request: Request) {
         };
 
         console.log(JSON.stringify(endEvent));
+
+        // 5. Trigger hold cleanup to supersede any holds that overlap with new bookings
+        try {
+            const cleanupUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/cron/hold-cleanup`;
+            // Fire and forget (don't wait for it to complete if we're near timeout, but here we just try)
+            fetch(cleanupUrl, {
+                headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }
+            }).catch(e => console.error('[Refresh] Background hold cleanup trigger failed:', e));
+            
+            console.log('[Refresh] Triggered hold cleanup');
+        } catch (e) {
+            console.error('[Refresh] Failed to trigger hold cleanup:', e);
+        }
+
         return NextResponse.json(endEvent);
 
     } finally {

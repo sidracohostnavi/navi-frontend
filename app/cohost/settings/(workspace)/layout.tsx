@@ -19,6 +19,7 @@ const SIDEBAR_ITEMS = [
     { name: 'Connections', href: '/cohost/settings/connections', icon: ConnIcon },
     { name: 'Calendar Sync', href: '/cohost/settings/calendar', icon: Calendar },
     { name: 'Properties', href: '/cohost/settings/properties', icon: Home },
+    { name: 'Pricing & Fees', href: '/cohost/settings/pricing', icon: CreditCard },
     { name: 'Team Members', href: '/cohost/settings/team', icon: Users },
     { name: 'Notification Preferences', href: '/cohost/settings/notifications', icon: Bell },
     { name: 'Billing', href: '/cohost/settings/billing', icon: CreditCard },

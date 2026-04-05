@@ -114,13 +114,28 @@ Gmail enrichment runs only when at least one active future booking has `enriched
 ### Law 18 — Fact Deduplication ⭐ NEW
 Before inserting a new `reservation_fact`, check if one with the same `confirmation_code` already exists for that `connection_id`. If yes, skip insertion. Never create duplicate facts for the same booking.
 
+### Law 19 — Calendar UI Two-Layer Architecture ⭐ CRITICAL
+The calendar grid in `CalendarClient.tsx` uses **two independent layers** on the same CSS grid. This is the most fragile part of the UI. Any LLM touching this file MUST read `docs/calendar/ARCHITECTURE.md` Section 3 in full first.
+
+**Layer 1 (Grid Cells):** background cells rendered by `dates.map()`. Sit at default z-index. Intended as the click target for date selection.
+
+**Layer 2 (Booking/Broom Overlays):** booking pills, cleaning blocks, and standalone checkout brooms rendered by `propertyBookings.map()`. Sit at `z-10` or `z-20`. Purely visual — annotate what's booked.
+
+**Immutable rules for anyone touching `CalendarClient.tsx`:**
+- NEVER change the `span + 1` on the booking wrapper without understanding it is an intentional visual bleed into the checkout column so hosts see the booking extends to checkout day (11am checkout). The pill itself stops short at `right: CELL_WIDTH * 0.9`.
+- The standalone checkout broom (`STANDALONE CHECKOUT BROOM CELL`) is a **decorative Layer 2 element** — it has nothing to do with the booking span. Never move it, delete it, or change its grid column without owner approval.
+- `type: 'cleaning'` items (amber background) are ONLY generated for policy-enabled properties by the API. Non-policy properties never get these. Do not confuse them with the standalone checkout broom.
+- Layer 2 wrappers at z-20 sit above Layer 1 and intercept mouse events. This is the root cause of the broom click problem. The correct fix is to add `pointer-events-none` to Layer 2 wrappers and `pointer-events-auto` to the inner pill only — NOT to move or restructure the broom.
+- Do NOT apply any fix to broom/click behaviour without reading Section 6 of `docs/calendar/ARCHITECTURE.md` first and getting explicit owner approval.
+
 ---
 
 ## Module Map
 
 | Module | Key Files | Contract |
 |--------|-----------|----------|
-| Calendar / iCal | `app/api/cohost/ical/`, `lib/services/ical-processor.ts` | `docs/calendar/CALENDAR_CONTRACT.md` |
+| Calendar / iCal sync | `app/api/cohost/ical/`, `lib/services/ical-processor.ts` | `docs/calendar/CALENDAR_CONTRACT.md` |
+| Calendar UI | `app/cohost/calendar/CalendarClient.tsx`, `app/api/cohost/calendar/route.ts` | `docs/calendar/ARCHITECTURE.md` ⚠️ Read Section 3 before touching |
 | Connections / Gmail | `app/api/cohost/connections/`, `lib/services/gmail-service.ts` | `docs/connections/CONNECTIONS_CONTRACT.md` |
 | Enrichment | `lib/services/email-processor.ts` | `docs/cohost/ENRICHMENT_CONTRACT.md` |
 | Inbox / Messaging | `app/cohost/messaging/`, `app/api/cohost/generate-draft/` | `docs/inbox/INBOX_CONTRACT.md` |

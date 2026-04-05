@@ -900,6 +900,12 @@ export class EmailProcessor {
 
     static parseReservationEmail(bodyRaw: string, subject: string, isCandidate = false, stats?: any): ExtractedFact | null {
         try {
+            // Surgical Fix: Strip invisible Unicode Bidirectional Isolation/Formatting characters (e.g. U+2068, U+2069)
+            // that Airbnb recently added to subjects and body text around guest names.
+            const bidiRegex = /[\u200e\u200f\u202a-\u202e\u2060-\u206f]/g;
+            subject = subject.replace(bidiRegex, '');
+            bodyRaw = bodyRaw.replace(bidiRegex, '');
+
             // Normalize body: collapse multiple spaces/newlines
             const body = bodyRaw.replace(/\s+/g, ' ').trim();
 
@@ -929,7 +935,7 @@ export class EmailProcessor {
 
             // B. Airbnb/VRBO Pattern: "Reservation confirmed - [Name] arrives..."
             if (!guest_name) {
-                const airbnbMatch = subject.match(/(?:Reservation|Booking)\s+(?:confirmed|from)\s*[-:]\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
+                const airbnbMatch = subject.match(/(?:Reservation|Booking)\s+(?:confirmed|from)\s*[-:]\s*(.+?)(?:\s+arrives|$)/i);
                 if (airbnbMatch) {
                     guest_name = this.cleanGuestName(airbnbMatch[1]);
                 }
@@ -938,9 +944,9 @@ export class EmailProcessor {
             // C. Body fallback: Look for "Guest: [Name]" or "Name: [Name]" patterns
             if (!guest_name) {
                 const bodyNamePatterns = [
-                    /Guest(?:\s+name)?:\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)/i,
-                    /Booked by:\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)/i,
-                    /Name:\s*([A-Za-z]+(?:\s+[A-Za-z]+)?)/i,
+                    /Guest(?:\s+name)?:\s*([A-Za-z0-9\.\s'\-]+)/i,
+                    /Booked by:\s*([A-Za-z0-9\.\s'\-]+)/i,
+                    /Name:\s*([A-Za-z0-9\.\s'\-]+)/i,
                 ];
                 for (const pattern of bodyNamePatterns) {
                     const match = body.match(pattern);
@@ -1203,8 +1209,8 @@ export class EmailProcessor {
             return null;
         }
 
-        // Allow names with letters, spaces, hyphens, and apostrophes (O'Brien, Mary-Jane)
-        if (!/^[A-Za-z][A-Za-z'\-\s]*[A-Za-z]$/.test(name) && name.length > 2) {
+        // Allow names with letters, spaces, hyphens, and apostrophes (O'Brien, Mary-Jane, Jordan M.)
+        if (!/^[A-Z][A-Za-z'\.\-\s]*[A-Za-z\.]$/i.test(name) && name.length > 2) {
             // If it doesn't look like a name but is long, still return it (might be valid)
             // Only reject if it starts with a digit or contains obviously bad patterns
             if (/^\d/.test(name) || /\d{4}/.test(name)) {

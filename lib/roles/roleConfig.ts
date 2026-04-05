@@ -28,6 +28,7 @@ export interface FeaturePermissions {
     canViewCalendarSync: boolean;
     canViewSettingsTab: boolean;
     canViewReviewInbox: boolean;
+    canManagePricing: boolean;
 }
 
 export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
@@ -45,6 +46,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewCalendarSync: true,
         canViewSettingsTab: true,
         canViewReviewInbox: true,
+        canManagePricing: true,
     },
     admin: {
         canViewCalendar: true,
@@ -60,6 +62,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewCalendarSync: true,
         canViewSettingsTab: true,
         canViewReviewInbox: true,
+        canManagePricing: true,
     },
     manager: {
         canViewCalendar: true,
@@ -75,6 +78,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewCalendarSync: false,
         canViewSettingsTab: true,
         canViewReviewInbox: true,
+        canManagePricing: true,
     },
     cleaner: {
         canViewCalendar: true,
@@ -90,6 +94,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewCalendarSync: false,
         canViewSettingsTab: false,
         canViewReviewInbox: false,
+        canManagePricing: false,
     },
 };
 
@@ -103,6 +108,7 @@ export const SIDEBAR_PERMISSION_MAP: Record<string, keyof FeaturePermissions> = 
     '/cohost/settings/billing': 'canViewBilling',
     '/cohost/settings/profile': 'canViewProfile',
     '/cohost/settings/support': 'canViewSupport',
+    '/cohost/settings/pricing': 'canManagePricing',
 };
 
 // Helper: is this a valid assignable role?

@@ -5,6 +5,8 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getPermissionsForRole, type FeaturePermissions } from '@/lib/roles/roleConfig';
+import DateSelectionMenu from './components/DateSelectionMenu';
+import CreateQuoteModal from './components/CreateQuoteModal';
 
 import {
   HomeIcon,
@@ -23,7 +25,14 @@ import { getPlatformColors, getPlatformBadgeLabel } from '@/lib/utils/platform-c
 type Property = {
   id: string;
   name: string;
+  workspace_id?: string;
   image?: string;
+  color?: string;
+  base_nightly_rate?: number;
+  base_guests_included?: number;
+  extra_guest_fee?: number;
+  min_nights?: number;
+  max_guests?: number;
 };
 
 type Channel = 'direct' | 'airbnb' | 'vrbo' | 'other';
@@ -255,6 +264,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   // Data State
   const [properties, setProperties] = useState<Property[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [holds, setHolds] = useState<any[]>([]);
 
 
 
@@ -263,6 +273,43 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [connectionIdMap, setConnectionIdMap] = useState<Record<string, string>>({}); // NormalizedName -> UUID
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+
+  // Date selection state
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState<{ propertyId: string; date: Date } | null>(null);
+  const [selectionEnd, setSelectionEnd] = useState<Date | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; propertyId: string; startDate: Date; endDate: Date } | null>(null);
+  const [showQuoteModal, setShowQuoteModal] = useState(false);
+  const [showBlockModal, setShowBlockModal] = useState(false);
+
+  // ADD: Persisted selection for modals (doesn't clear when context menu closes)
+  const [modalSelection, setModalSelection] = useState<{
+    propertyId: string;
+    propertyName: string;
+    startDate: Date;
+    endDate: Date;
+  } | null>(null);
+
+  // Derived state for modals
+  const selectedProperty = properties.find(p => p.id === contextMenu?.propertyId);
+  const selectedRange = contextMenu ? { startDate: contextMenu.startDate, endDate: contextMenu.endDate } : null;
+
+  // Keyboard handler for Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null);
+        setIsSelecting(false);
+        setSelectionStart(null);
+        setSelectionEnd(null);
+        setShowQuoteModal(false);
+        setShowBlockModal(false);
+        setModalSelection(null);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
 
   // Resolution modal state
@@ -320,19 +367,37 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
     }
   }, [supabase]);
 
+  // Fetch Holds Helper
+  const fetchHolds = useCallback(async () => {
+    try {
+      const res = await fetch('/api/cohost/holds');
+      if (res.ok) {
+        const data = await res.json();
+        const pendingHolds = (data || []).filter((h: any) => h.status === 'pending' || h.status === 'draft');
+        setHolds(pendingHolds);
+        console.log(`[Calendar DEBUG] Fetched ${pendingHolds.length} pending holds`);
+      }
+    } catch (e) {
+      console.error('Error fetching holds:', e);
+    }
+  }, []);
+
   // Initial Fetch (Properties + Feeds + First 45 Days)
   const fetchInitialData = useCallback(async (startPoint: Date) => {
     try {
       setLoading(true);
 
-      // 1. Fetch Feeds (Always fetch to ensure fresh identity/timestamp data)
-      await fetchFeeds();
+      // 1. Fetch Feeds & Holds
+      await Promise.all([
+        fetchFeeds(),
+        fetchHolds()
+      ]);
 
       // 2. Fetch Properties (only if empty)
       if (properties.length === 0) {
         const { data: propsData, error: propsError } = await supabase
           .from('cohost_properties')
-          .select('id, name, image_url, color')
+          .select('id, name, image_url, workspace_id, color, base_nightly_rate, base_guests_included, extra_guest_fee, min_nights, max_guests')
           .order('name');
 
         if (propsError) throw propsError;
@@ -761,13 +826,14 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
+        onMouseLeave={() => setHoveredBooking(null)}
         className="flex-1 overflow-auto relative custom-scrollbar overscroll-contain"
       >
         <div
-          className="grid relative"
+          className="grid relative select-none"
           style={{
-            minWidth: `${sidebarWidth + (loadedDays * CELL_WIDTH)}px`,
             gridTemplateColumns: `${sidebarWidth}px repeat(${loadedDays}, ${CELL_WIDTH}px)`,
+            minWidth: `${sidebarWidth + (loadedDays * CELL_WIDTH)}px`,
           }}
         >
           {/* Header Row: Properties Title */}
@@ -776,6 +842,17 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
             style={{ gridColumn: '1', gridRow: '1', height: HEADER_HEIGHT }}
           >
           </div>
+
+          {/* Resize Handle: Vertical line between sidebar and grid */}
+          {!isMobile && (
+            <div
+              className={`absolute top-0 bottom-0 z-[60] w-1.5 cursor-col-resize hover:bg-blue-500/20 active:bg-blue-500/40 transition-colors group/resizer`}
+              style={{ left: sidebarWidth - 3 }}
+              onMouseDown={startResizing}
+            >
+              <div className="absolute inset-y-0 right-0 w-[1px] bg-gray-200" />
+            </div>
+          )}
 
           {/* Header Row: Dates */}
           {dates.map((date, i) => {
@@ -810,14 +887,14 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
           )}
 
           {/* Property Rows */}
-          {gridReady && !loading && properties.map((property, rowIdx) => {
+          {gridReady && !loading && properties.filter(p => !!p.name).map((property, rowIdx, filteredProps) => {
             const gridRow = rowIdx + 2;
             const allPropertyBookings = bookings.filter(b => b.propertyId === property.id);
 
             // Direct render: one block per booking row, no grouping
             const propertyBookings = allPropertyBookings;
 
-            const isLast = rowIdx === properties.length - 1;
+            const isLast = rowIdx === filteredProps.length - 1;
             const rowClass = isLast ? '' : 'border-b border-gray-100';
 
             return (
@@ -846,17 +923,93 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                   </div>
                 </div>
 
-                {/* Grid Cells */}
                 {dates.map((date, colIdx) => {
-                  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-                  return (
-                    <div
-                      key={`${property.id}-day-${colIdx}`}
-                      className={`border-r border-gray-50 ${isWeekend ? 'bg-gray-50/30' : 'bg-white'} ${rowClass}`}
-                      style={{ gridRow: gridRow, gridColumn: colIdx + 2 }}
-                    />
-                  );
-                })}
+  const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+  const dateStr = toIso(date);
+
+  // Policy-aware block: type:'cleaning' items only block on policy-enabled properties.
+  // Real bookings (start <= date < end) always block. Checkout day (endDate === dateStr) is NOT blocked.
+  const cellPolicy = propertyPolicies[property.id];
+  const cellHasPolicy = !!(cellPolicy && (cellPolicy.cleaning_pre_days > 0 || cellPolicy.cleaning_post_days > 0));
+  const isBooked = allPropertyBookings.some(b => {
+    if (!(b.startDate <= dateStr && b.endDate > dateStr)) return false;
+    if (b.type === 'cleaning') return cellHasPolicy;
+    return true;
+  });
+
+  // Selection Range Logic
+  const rangeStart = isSelecting ? selectionStart?.date : contextMenu?.startDate;
+  const rangeEnd = isSelecting ? selectionEnd : contextMenu?.endDate;
+  const isSameProp = isSelecting ? (selectionStart?.propertyId === property.id) : (contextMenu?.propertyId === property.id);
+
+  const isInSelection = isSameProp && rangeStart && rangeEnd && (
+    (date >= rangeStart && date <= rangeEnd) || (date <= rangeStart && date >= rangeEnd)
+  );
+
+  const isActiveCell = isSameProp && rangeEnd && date.getTime() === rangeEnd.getTime();
+
+  return (
+    <div
+      key={`${property.id}-day-${colIdx}`}
+      className={`
+        relative border-r border-gray-100 group/cell overflow-hidden cursor-pointer
+        ${rowClass}
+        ${isWeekend ? 'bg-gray-50/30' : 'bg-white'}
+      `}
+      style={{ gridRow: gridRow, gridColumn: colIdx + 2 }}
+      onMouseEnter={() => {
+        // Preview range expansion
+        if (isSelecting && selectionStart?.propertyId === property.id) {
+          setSelectionEnd(date);
+        }
+      }}
+      onClick={(e) => {
+        if (userRole === 'cleaner' || isBooked) return;
+
+        if (!isSelecting) {
+          // First click: Start selection
+          setHoveredBooking(null);
+          setContextMenu(null);
+          setIsSelecting(true);
+          setSelectionStart({ propertyId: property.id, date });
+          setSelectionEnd(date);
+        } else {
+          // Second click: Finalize or Switch
+          if (selectionStart?.propertyId === property.id) {
+            // Finalize on same row
+            const start = selectionStart.date <= date ? selectionStart.date : date;
+            const end = selectionStart.date <= date ? date : selectionStart.date;
+            setContextMenu({ x: e.clientX, y: e.clientY, propertyId: property.id, startDate: start, endDate: end });
+            setIsSelecting(false);
+            setSelectionStart(null);
+            setSelectionEnd(null);
+          } else {
+            // Clicked different row: Restart selection there
+            setSelectionStart({ propertyId: property.id, date });
+            setSelectionEnd(date);
+          }
+        }
+      }}
+    >
+      {/* Selection Highlight (Dull Teal - Professional Muted) */}
+      {isInSelection && (
+        <div className={`absolute inset-0 bg-[#0F4C47]/90 pointer-events-none ${isActiveCell ? 'ring-2 ring-inset ring-[#062D2A] bg-[#062D2A]/40 border-l border-r border-[#062D2A]/30 shadow-inner' : ''}`} />
+      )}
+
+      {/* Hover Outline (Idle) */}
+      {!isInSelection && !isSelecting && !contextMenu && !isBooked && userRole !== 'cleaner' && (
+        <div className="absolute inset-x-0 inset-y-0 border-2 border-emerald-800 opacity-0 group-hover/cell:opacity-100 pointer-events-none z-10" />
+      )}
+
+      {/* Nightly Price Display */}
+      {!isBooked && property.base_nightly_rate && (userRole === 'owner' || userRole === 'manager' || userRole === 'admin') && (
+        <div className={`absolute top-1 right-1 text-[10px] font-medium pointer-events-none transition-colors ${isInSelection ? 'text-white' : 'text-gray-400 group-hover/cell:text-gray-600'}`}>
+          ${Math.round(property.base_nightly_rate)}
+        </div>
+      )}
+    </div>
+  );
+})}
 
                 {/* Dedup: same property + same dates + same type → keep one, prefer enriched */}
                 {(() => {
@@ -1036,7 +1189,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                   return (
                     <React.Fragment key={booking.id}>
                       <div
-                        className={`relative ${isPast ? 'z-0' : (booking.type === 'cleaning' ? 'z-10' : 'z-20')}`}
+                        className={`relative pointer-events-none ${isPast ? 'z-0' : (booking.type === 'cleaning' ? 'z-10' : 'z-20')}`}
                         style={{
                           gridRow: gridRow,
                           gridColumn: `${start + 2} / span ${booking.type === 'cleaning' ? span : span + 1}`,
@@ -1070,7 +1223,7 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                             >
                               <div
                                 className={`
-                          rounded-lg flex items-center px-1.5 overflow-hidden cursor-pointer transition-all h-12
+                          pointer-events-auto rounded-lg flex items-center px-1.5 overflow-hidden cursor-pointer transition-all h-12
                           ${finalClasses}
                           ${isPast ? 'opacity-60 grayscale filter brightness-95 border-opacity-20' : 'shadow-sm'}
                           ${isActive ? 'ring-2 ring-blue-500 ring-offset-1 shadow-lg' : 'hover:scale-[1.02] active:scale-[0.98]'}
@@ -1174,20 +1327,152 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                     </React.Fragment>
                   );
                 })}
+
+                {/* --- RENDER HOLDS --- */}
+                {holds
+                  .filter(hold => hold.property_id === property.id)
+                  .map(hold => {
+                    const hStart = parseDateOnly(hold.check_in);
+                    const hEnd = parseDateOnly(hold.check_out);
+                    const wStart = normalizeToLocalMidnight(rangeStart!);
+
+                    const diffTime = hStart.getTime() - wStart.getTime();
+                    const startIndex = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    const durationTime = hEnd.getTime() - hStart.getTime();
+                    const durationDays = Math.ceil(durationTime / (1000 * 60 * 60 * 24));
+
+                    const { start, span, isVisible } = getGridPosition({ startDate: hold.check_in, endDate: hold.check_out }, rangeStart!, loadedDays);
+                    if (!isVisible) return null;
+
+                    return (
+                      <div
+                        key={hold.id}
+                        className="relative z-10"
+                        style={{
+                          gridRow: gridRow,
+                          gridColumn: `${start + 2} / span ${span + 1}`,
+                          height: ROW_HEIGHT,
+                        }}
+                      >
+                        <div
+                          className="absolute border-2 border-dashed border-teal-400 bg-teal-50/50 rounded-lg flex items-center px-2 cursor-pointer transition-all hover:bg-teal-100/60"
+                          style={{
+                            left: CELL_WIDTH / 2,
+                            right: CELL_WIDTH * 0.9,
+                            top: '50%',
+                            height: '40px',
+                            transform: 'translateY(-50%)',
+                          }}
+                          title={`Pending Quote: ${hold.guest_first_name} ${hold.guest_last_name}`}
+                        >
+                          <span className="text-[10px] sm:text-xs font-bold text-teal-700 truncate">
+                            ⏳ {hold.guest_first_name} {hold.guest_last_name}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
               </React.Fragment>
             );
           })}
         </div>
 
+        {/* Date Selection Context Menu */}
+        {contextMenu && selectedProperty && (
+          <DateSelectionMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            propertyId={contextMenu.propertyId}
+            propertyName={selectedProperty.name}
+            startDate={contextMenu.startDate}
+            endDate={contextMenu.endDate}
+            onClose={() => setContextMenu(null)}
+            onCreateQuote={() => {
+              // Persist selection before closing context menu
+              setModalSelection({
+                propertyId: contextMenu.propertyId,
+                propertyName: selectedProperty?.name || '',
+                startDate: contextMenu.startDate,
+                endDate: contextMenu.endDate,
+              });
+              setShowQuoteModal(true);
+              setContextMenu(null);
+            }}
+            onCreateReservation={() => {
+              setModalSelection({
+                propertyId: contextMenu.propertyId,
+                propertyName: selectedProperty?.name || '',
+                startDate: contextMenu.startDate,
+                endDate: contextMenu.endDate,
+              });
+              setShowQuoteModal(true);
+              setContextMenu(null);
+            }}
+            onCreateClosedPeriod={() => {
+              setModalSelection({
+                propertyId: contextMenu.propertyId,
+                propertyName: selectedProperty?.name || '',
+                startDate: contextMenu.startDate,
+                endDate: contextMenu.endDate,
+              });
+              setShowBlockModal(true);
+              setContextMenu(null);
+            }}
+          />
+        )}
+
         {/* Loading Indicator at End */}
-        {
-          loadingMore && (
-            <div className="flex justify-center py-4 bg-gray-50 border-t border-gray-100">
-              <span className="text-sm text-gray-500 animate-pulse">Loading future dates...</span>
-            </div>
-          )
-        }
+        {loadingMore && (
+          <div className="flex justify-center py-4 bg-gray-50 border-t border-gray-100">
+            <span className="text-sm text-gray-500 animate-pulse">Loading future dates...</span>
+          </div>
+        )}
       </div>
+
+      {/* Create Quote Modal */}
+      {showQuoteModal && modalSelection && (
+        <CreateQuoteModal
+          isOpen={showQuoteModal}
+          onClose={() => {
+            setShowQuoteModal(false);
+            setModalSelection(null);
+          }}
+          propertyId={modalSelection.propertyId}
+          propertyName={modalSelection.propertyName}
+          startDate={modalSelection.startDate}
+          endDate={modalSelection.endDate}
+          properties={properties}
+          onSuccess={() => {
+            // Refresh calendar data for the currently loaded range
+            if (rangeStart) {
+              fetchBookingsRange(rangeStart, addDays(rangeStart, loadedDays));
+            }
+          }}
+        />
+      )}
+
+      {/* Block Modal Placeholder */}
+      {showBlockModal && modalSelection && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]" onClick={() => { setShowBlockModal(false); setModalSelection(null); }}>
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold mb-4">Create Closed Period</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Property: {modalSelection.propertyName}<br />
+              Dates: {modalSelection.startDate.toLocaleDateString()} → {modalSelection.endDate.toLocaleDateString()}
+            </p>
+            <p className="text-sm text-gray-500 mb-4">(Full modal coming in Phase 3)</p>
+            <button 
+              onClick={() => {
+                setShowBlockModal(false);
+                setModalSelection(null);
+              }}
+              className="w-full px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Portal Tooltip — rendered outside stacking contexts so it's always on top */}
       {hoveredBooking && createPortal(
