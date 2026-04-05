@@ -8,7 +8,7 @@ const supabase = createClient(
 
 export async function GET(
   request: Request,
-  { params }: { params: { propertyId: string } }
+  { params }: { params: Promise<{ propertyId: string }> }
 ) {
   const propertyId = (await params).propertyId;
 
