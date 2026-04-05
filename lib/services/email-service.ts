@@ -1,15 +1,174 @@
 import { Resend } from 'resend';
 
-const resendKey = process.env.RESEND_API_KEY;
-if (!resendKey) {
-  console.warn('RESEND_API_KEY is missing from environment variables. Email features will fail.');
+function getResend() {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey && process.env.NODE_ENV === 'production') {
+    console.warn('RESEND_API_KEY is missing');
+  }
+  return new Resend(apiKey || 'unspecified');
 }
 
-const resend = new Resend(resendKey || 're_dummy_key_for_build');
+interface SendQuoteEmailParams {
+  to: string;
+  guestFirstName: string;
+  propertyName: string;
+  checkIn: string;
+  checkOut: string;
+  totalPrice: number; // cents
+  paymentLink: string;
+  expiresAt: string;
+  hostName?: string;
+  cancellationPolicy?: string;
+  rentalAgreement?: string;
+}
 
-const FROM_EMAIL = process.env.EMAIL_FROM || 'Navi CoHost <bookings@cohostnavi.com>';
+export async function sendQuoteEmail(params: SendQuoteEmailParams): Promise<boolean> {
+  const {
+    to,
+    guestFirstName,
+    propertyName,
+    checkIn,
+    checkOut,
+    totalPrice,
+    paymentLink,
+    expiresAt,
+    hostName,
+    cancellationPolicy,
+    rentalAgreement,
+  } = params;
 
-interface BookingEmailData {
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
+  try {
+    const { data, error } = await getResend().emails.send({
+      from: 'Navi CoHost <bookings@cohostnavi.com>',
+      to,
+      subject: `Your Booking Quote for ${propertyName}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { text-align: center; padding: 20px 0; }
+            .card { background: #f9fafb; border-radius: 12px; padding: 24px; margin: 20px 0; border: 1px solid #e5e7eb; }
+            .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e5e7eb; }
+            .detail-row:last-child { border-bottom: none; }
+            .label { color: #6b7280; }
+            .value { font-weight: 600; }
+            .total { font-size: 24px; color: #111; margin: 20px 0; text-align: center; font-weight: bold; }
+            .button { display: inline-block; background: #14b8a6; color: white; padding: 16px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 20px 0; }
+            .button-container { text-align: center; }
+            .footer { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 40px; }
+            .expiry { background: #fffbeb; color: #92400e; padding: 12px; border-radius: 8px; text-align: center; margin: 20px 0; font-size: 14px; border: 1px solid #fef3c7; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1 style="color: #14b8a6; margin: 0; font-size: 28px;">Your Booking Quote</h1>
+            </div>
+            
+            <p>Hi ${guestFirstName},</p>
+            
+            <p>Great news! Your booking request has been received. Here are the details:</p>
+            
+            <div class="card">
+              <h2 style="margin-top: 0; color: #111;">${propertyName}</h2>
+              
+              <div class="detail-row">
+                <span class="label">Check-in</span>
+                <span class="value">${formatDate(checkIn)}</span>
+              </div>
+              
+              <div class="detail-row">
+                <span class="label">Check-out</span>
+                <span class="value">${formatDate(checkOut)}</span>
+              </div>
+            </div>
+            
+            <div class="total">
+              Total: ${formatPrice(totalPrice)}
+            </div>
+
+            ${cancellationPolicy || rentalAgreement ? `
+              <div style="margin: 30px 0; padding: 20px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+                <h3 style="margin: 0 0 15px 0; color: #374151; font-size: 16px;">Important Information</h3>
+                
+                ${cancellationPolicy ? `
+                  <div style="margin-bottom: 15px;">
+                    <strong style="color: #4b5563; font-size: 14px;">Cancellation Policy:</strong>
+                    <p style="margin: 5px 0; color: #6b7280; font-size: 14px;">${cancellationPolicy}</p>
+                  </div>
+                ` : ''}
+                
+                ${rentalAgreement ? `
+                  <div>
+                    <strong style="color: #4b5563; font-size: 14px;">Rental Agreement:</strong>
+                    <p style="margin: 5px 0; color: #6b7280; white-space: pre-wrap; font-size: 13px; font-family: monospace;">${
+                      rentalAgreement.length > 800 
+                        ? rentalAgreement.substring(0, 800) + '...\n\n[Full agreement available on checkout page]'
+                        : rentalAgreement
+                    }</p>
+                  </div>
+                ` : ''}
+              </div>
+              
+              <p style="color: #92400e; background: #fef3c7; padding: 12px; border-radius: 6px; text-align: center; font-size: 13px; font-weight: bold;">
+                ⚠️ You will be asked to confirm you have read and agree to these terms before completing your booking.
+              </p>
+            ` : ''}
+            
+            <div class="button-container">
+              <a href="${paymentLink}" class="button">Complete Your Booking</a>
+            </div>
+            
+            <div class="expiry">
+              ⏰ This quote expires on ${formatDate(expiresAt)}
+            </div>
+            
+            <p>Click the button above to complete your payment and confirm your reservation.</p>
+            
+            <p>If you have any questions, please don't hesitate to reach out.</p>
+            
+            <p>Looking forward to hosting you!</p>
+            
+            ${hostName ? `<p>— ${hostName}</p>` : ''}
+            
+            <div class="footer">
+              <p>This email was sent via Navi CoHost</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+    });
+
+    if (error) {
+      console.error('[Email] Resend error:', error);
+      return false;
+    }
+
+    console.log('[Email] Quote email sent successfully:', data?.id);
+    return true;
+  } catch (e) {
+    console.error('[Email] Failed to send quote email:', e);
+    return false;
+  }
+}
+
+export async function sendGuestConfirmationEmail(params: {
   guestName: string;
   guestEmail: string;
   propertyName: string;
@@ -17,154 +176,99 @@ interface BookingEmailData {
   checkOut: string;
   totalPrice: number;
   nights: number;
-}
-
-interface HostEmailData extends BookingEmailData {
-  hostEmail: string;
-  guestPhone?: string;
-}
-
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr).toLocaleDateString('en-US', {
+}): Promise<boolean> {
+  const { guestName, guestEmail, propertyName, checkIn, checkOut, totalPrice, nights } = params;
+  
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
       weekday: 'long',
       month: 'long',
       day: 'numeric',
       year: 'numeric',
-      timeZone: 'UTC' // Explicit UTC for check-in/out dates
     });
-  } catch (e) {
-    return dateStr;
-  }
-}
+  };
 
-function formatCurrency(cents: number): string {
-  return new Intl.NumberFormat('en-US', { 
-    style: 'currency', 
-    currency: 'USD' 
-  }).format(cents / 100);
-}
+  const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
-/**
- * Send booking confirmation to guest
- */
-export async function sendGuestConfirmationEmail(data: BookingEmailData) {
-  const { guestName, guestEmail, propertyName, checkIn, checkOut, totalPrice, nights } = data;
-  
   try {
-    const { data: res, error } = await resend.emails.send({
-      from: FROM_EMAIL,
+    const { error } = await getResend().emails.send({
+      from: 'Navi CoHost <bookings@cohostnavi.com>',
       to: guestEmail,
-      subject: `Booking Confirmed - ${propertyName}`,
+      subject: `Booking Confirmed: ${propertyName}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h1 style="color: #1a1a1a;">Booking Confirmed!</h1>
-          
+          <h1 style="color: #14b8a6;">Booking Confirmed!</h1>
           <p>Hi ${guestName},</p>
-          
-          <p>Your booking has been confirmed. Here are the details:</p>
-          
-          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h2 style="margin-top: 0; color: #1a1a1a;">${propertyName}</h2>
+          <p>Your stay at <strong>${propertyName}</strong> is confirmed.</p>
+          <div style="background: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <p><strong>Check-in:</strong> ${formatDate(checkIn)}</p>
             <p><strong>Check-out:</strong> ${formatDate(checkOut)}</p>
             <p><strong>Nights:</strong> ${nights}</p>
-            <p><strong>Total Paid:</strong> ${formatCurrency(totalPrice)}</p>
+            <p><strong>Total Paid:</strong> ${formatPrice(totalPrice)}</p>
           </div>
-          
-          <p>The host will be in touch with check-in instructions closer to your arrival date.</p>
-          
-          <p>Thank you for booking!</p>
-          
-          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
-          
-          <p style="color: #666; font-size: 12px;">
-            This email was sent by Navi CoHost on behalf of your host.
-          </p>
+          <p>We're looking forward to having you!</p>
         </div>
       `,
     });
-    
-    if (error) throw error;
-    
-    console.log('Guest confirmation email sent to:', guestEmail, res?.id);
-    return true;
-  } catch (error) {
-    console.error('Failed to send guest confirmation email:', error);
+    return !error;
+  } catch (e) {
+    console.error('[Email] Failed to send guest confirmation:', e);
     return false;
   }
 }
 
-/**
- * Send new booking notification to host
- */
-export async function sendHostNotificationEmail(data: HostEmailData) {
-  const { 
-    hostEmail, 
-    guestName, 
-    guestEmail, 
-    guestPhone, 
-    propertyName, 
-    checkIn, 
-    checkOut, 
-    totalPrice, 
-    nights 
-  } = data;
-  
+export async function sendHostNotificationEmail(params: {
+  hostEmail: string;
+  guestName: string;
+  guestEmail: string;
+  guestPhone?: string;
+  propertyName: string;
+  checkIn: string;
+  checkOut: string;
+  totalPrice: number;
+  nights: number;
+}): Promise<boolean> {
+  const { hostEmail, guestName, guestEmail, guestPhone, propertyName, checkIn, checkOut, totalPrice, nights } = params;
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
   try {
-    const { data: res, error } = await resend.emails.send({
-      from: FROM_EMAIL,
+    const { error } = await getResend().emails.send({
+      from: 'Navi CoHost <bookings@cohostnavi.com>',
       to: hostEmail,
-      subject: `New Booking - ${propertyName}`,
+      subject: `New Booking: ${guestName} at ${propertyName}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h1 style="color: #1a1a1a;">New Direct Booking!</h1>
-          
+          <h1 style="color: #14b8a6;">New Direct Booking!</h1>
           <p>You have a new booking for <strong>${propertyName}</strong>.</p>
-          
-          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="margin-top: 0;">Guest Details</h3>
-            <p><strong>Name:</strong> ${guestName}</p>
+          <div style="background: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <p><strong>Guest:</strong> ${guestName}</p>
             <p><strong>Email:</strong> ${guestEmail}</p>
             ${guestPhone ? `<p><strong>Phone:</strong> ${guestPhone}</p>` : ''}
-            
-            <h3>Stay Details</h3>
-            <p><strong>Check-in:</strong> ${formatDate(checkIn)}</p>
-            <p><strong>Check-out:</strong> ${formatDate(checkOut)}</p>
-            <p><strong>Nights:</strong> ${nights}</p>
-            <p><strong>Total:</strong> ${formatCurrency(totalPrice)}</p>
+            <p><strong>Dates:</strong> ${formatDate(checkIn)} - ${formatDate(checkOut)} (${nights} nights)</p>
+            <p><strong>Payout:</strong> ${formatPrice(totalPrice)}</p>
           </div>
-          
-          <p>
-            <a href="${process.env.NEXT_PUBLIC_APP_URL}/cohost/calendar" 
-               style="display: inline-block; background: #FA5A5A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">
-              View in Navi
-            </a>
-          </p>
-          
-          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
-          
-          <p style="color: #666; font-size: 12px;">
-            This booking was made through your Navi CoHost direct booking page.
-          </p>
+          <p>The calendar has been updated accordingly.</p>
         </div>
       `,
     });
-    
-    if (error) throw error;
-    
-    console.log('Host notification email sent to:', hostEmail, res?.id);
-    return true;
-  } catch (error) {
-    console.error('Failed to send host notification email:', error);
+    return !error;
+  } catch (e) {
+    console.error('[Email] Failed to send host notification:', e);
     return false;
   }
 }
 
-/**
- * Send payment link to guest
- */
-export async function sendPaymentLinkEmail(data: {
+export async function sendPaymentLinkEmail(params: {
   guestName: string;
   guestEmail: string;
   propertyName: string;
@@ -173,65 +277,52 @@ export async function sendPaymentLinkEmail(data: {
   totalPrice: number;
   nights: number;
   paymentUrl: string;
-}) {
-  const { 
-    guestName, 
-    guestEmail, 
-    propertyName, 
-    checkIn, 
-    checkOut, 
-    totalPrice, 
-    nights,
-    paymentUrl,
-  } = data;
-  
+}): Promise<boolean> {
+  const { guestName, guestEmail, propertyName, checkIn, checkOut, totalPrice, nights, paymentUrl } = params;
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const formatPrice = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
   try {
-    const { data: res, error } = await resend.emails.send({
-      from: FROM_EMAIL,
+    const { error } = await getResend().emails.send({
+      from: 'Navi CoHost <bookings@cohostnavi.com>',
       to: guestEmail,
-      subject: `Complete Your Booking - ${propertyName}`,
+      subject: `Payment Link for your stay at ${propertyName}`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h1 style="color: #1a1a1a;">Complete Your Booking</h1>
-          
+          <h1 style="color: #14b8a6;">Complete Your Booking</h1>
           <p>Hi ${guestName},</p>
+          <p>Please click the link below to complete your payment for <strong>${propertyName}</strong>.</p>
           
-          <p>Your host has created a booking for you. Please complete payment to confirm:</p>
-          
-          <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h2 style="margin-top: 0; color: #1a1a1a;">${propertyName}</h2>
+          <div style="background: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <p><strong>Check-in:</strong> ${formatDate(checkIn)}</p>
             <p><strong>Check-out:</strong> ${formatDate(checkOut)}</p>
             <p><strong>Nights:</strong> ${nights}</p>
-            <p><strong>Total:</strong> ${formatCurrency(totalPrice)}</p>
+            <p><strong>Total Due:</strong> ${formatPrice(totalPrice)}</p>
           </div>
-          
-          <p>
-            <a href="${paymentUrl}" 
-               style="display: inline-block; background: #FA5A5A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px;">
-              Complete Payment
+
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${paymentUrl}" style="background: #14b8a6; color: white; padding: 16px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
+              Pay & Confirm Reservation
             </a>
-          </p>
-          
-          <p style="color: #666; font-size: 14px; margin-top: 20px;">
-            Or copy this link: ${paymentUrl}
-          </p>
-          
-          <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
-          
-          <p style="color: #666; font-size: 12px;">
-            This email was sent by Navi CoHost on behalf of your host.
-          </p>
+          </div>
+
+          <p>If you have any questions, please reply to this email.</p>
+          <p>Best regards,<br/>Navi CoHost Team</p>
         </div>
       `,
     });
-    
-    if (error) throw error;
-    
-    console.log('Payment link email sent to:', guestEmail, res?.id);
-    return true;
-  } catch (error) {
-    console.error('Failed to send payment link email:', error);
+    return !error;
+  } catch (e) {
+    console.error('[Email] Failed to send payment link:', e);
     return false;
   }
 }

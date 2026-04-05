@@ -1,7 +1,10 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
 import { calculatePrice } from '@/lib/services/pricing-service';
 import { randomBytes } from 'crypto';
+import { sendQuoteEmail } from '@/lib/services/email-service';
 
 export async function GET(request: Request) {
   const supabase = await createClient();
@@ -47,7 +50,7 @@ export async function POST(request: Request) {
   }
 
   // Validate required fields
-  const { propertyId, checkIn, checkOut, guestCount } = body;
+  const { propertyId, checkIn, checkOut, guestCount, policyId } = body;
   if (!propertyId || !checkIn || !checkOut) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
@@ -66,6 +69,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Dates overlap with existing booking' }, { status: 409 });
   }
 
+  // Fetch policy for expiry
+  let quoteExpiryHours = 48;
+  if (policyId) {
+    const { data: policy } = await supabase
+      .from('booking_policies')
+      .select('quote_expiry_hours')
+      .eq('id', policyId)
+      .single();
+    if (policy) quoteExpiryHours = policy.quote_expiry_hours;
+  }
+
   // Calculate price
   let priceBreakdown = null;
   let totalPrice = null;
@@ -81,15 +95,14 @@ export async function POST(request: Request) {
     totalPrice = priceBreakdown.grandTotal;
   } catch (e: any) {
     console.error('Price calculation failed:', e.message);
-    // Continue without price if calculation fails
   }
 
   // Generate unique payment link token
   const paymentLinkToken = randomBytes(32).toString('hex');
 
-  // Calculate expiry (48 hours from now)
+  // Calculate expiry
   const expiresAt = new Date();
-  expiresAt.setHours(expiresAt.getHours() + 48);
+  expiresAt.setHours(expiresAt.getHours() + quoteExpiryHours);
 
   // Create hold
   const { data: hold, error } = await supabase
@@ -110,7 +123,7 @@ export async function POST(request: Request) {
       notes: body.notes || null,
       total_price: totalPrice,
       price_breakdown: priceBreakdown,
-      policy_id: body.policyId || null,
+      policy_id: policyId || null,
       payment_link_token: paymentLinkToken,
       status: body.sendQuote ? 'pending' : 'draft',
       expires_at: expiresAt.toISOString(),
@@ -125,5 +138,53 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 
-  return NextResponse.json(hold);
+  // Send email if guest email provided and sendEmail flag is true
+  let emailSent = false;
+  if (body.sendEmail && body.guestEmail && hold.payment_link_token) {
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://cohostnavi.com';
+    const paymentLink = `${appUrl}/checkout/${hold.payment_link_token}`;
+    
+    // Get property name
+    const { data: property } = await supabase
+      .from('cohost_properties')
+      .select('name')
+      .eq('id', hold.property_id)
+      .single();
+
+    // Get policy details for email
+    let cancellationPolicy = undefined;
+    let rentalAgreement = undefined;
+    
+    if (hold.policy_id) {
+      const { data: policy } = await supabase
+        .from('booking_policies')
+        .select('cancellation_policy, rental_agreement_text')
+        .eq('id', hold.policy_id)
+        .single();
+      
+      if (policy) {
+        cancellationPolicy = policy.cancellation_policy || undefined;
+        rentalAgreement = policy.rental_agreement_text || undefined;
+      }
+    }
+
+    emailSent = await sendQuoteEmail({
+      to: body.guestEmail,
+      guestFirstName: body.guestFirstName || 'Guest',
+      propertyName: property?.name || 'Property',
+      checkIn: hold.check_in,
+      checkOut: hold.check_out,
+      totalPrice: hold.total_price || 0,
+      paymentLink,
+      expiresAt: hold.expires_at,
+      cancellationPolicy,
+      rentalAgreement,
+    });
+  }
+
+  return NextResponse.json({
+    ...hold,
+    emailSent,
+    paymentLink: `${process.env.NEXT_PUBLIC_APP_URL || 'https://cohostnavi.com'}/checkout/${hold.payment_link_token}`,
+  });
 }
