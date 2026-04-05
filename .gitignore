@@ -51,8 +51,9 @@ pnpm-debug.log*
 
 # secrets & keys
 *.pem
-*token*
-!app/**/[token]/**
+token.json
+gmail_token.json
+supabase_key.json
 *key*
 *secret*
 *credential*
