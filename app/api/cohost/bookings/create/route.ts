@@ -1,145 +1,104 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
+import { NextResponse } from 'next/server';
+import { calculatePrice } from '@/lib/services/pricing-service';
 
-export const dynamic = 'force-dynamic';
+export async function POST(request: Request) {
+  const supabase = await createClient();
+  const body = await request.json();
 
-export async function POST(request: NextRequest) {
-  try {
-    const supabase = await createClient();
-    const serviceRoleClient = createCohostServiceClient();
-    
-    // Get current user
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    
-    const body = await request.json();
-    const { 
-      propertyId, 
-      checkIn, 
-      checkOut, 
-      guestName, 
-      guestEmail, 
-      guestPhone,
-      guestCount,
-      customPrice,
-      notes,
-    } = body;
-    
-    // Validate required fields
-    if (!propertyId || !checkIn || !checkOut || !guestName || !guestEmail) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
-    }
-    
-    // Get property and verify access
-    const { data: property } = await supabase
-      .from('cohost_properties')
-      .select('id, workspace_id, nightly_rate, cleaning_fee, name, direct_booking_enabled')
-      .eq('id', propertyId)
-      .single();
-    
-    if (!property) {
-      return NextResponse.json({ error: 'Property not found' }, { status: 404 });
-    }
-    
-    // Verify user has access to workspace
-    const { data: membership } = await supabase
-      .from('cohost_workspace_members')
-      .select('role')
-      .eq('workspace_id', property.workspace_id)
-      .eq('user_id', user.id)
-      .single();
-    
-    if (!membership || !['owner', 'admin', 'operator'].includes(membership.role)) {
-      return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
-    }
-    
-    // Verify Stripe is connected
-    const { data: workspace } = await supabase
-      .from('cohost_workspaces')
-      .select('stripe_onboarding_complete')
-      .eq('id', property.workspace_id)
-      .single();
-    
-    if (!workspace?.stripe_onboarding_complete) {
-      return NextResponse.json({ error: 'Stripe not connected' }, { status: 400 });
-    }
-    
-    // Check availability (Only against CONFIRMED bookings or active holds)
-    // Non-confirmed host-initiated bookings (pending_payment) DO NOT block dates.
-    const { data: conflicts } = await supabase
-      .from('bookings')
-      .select('id')
-      .eq('property_id', propertyId)
-      .eq('is_active', true)
-      .eq('status', 'confirmed')
-      .lt('check_in', `${checkOut}T12:00:00Z`)
-      .gt('check_out', `${checkIn}T12:00:00Z`)
-      .limit(1);
-    
-    if (conflicts && conflicts.length > 0) {
-      return NextResponse.json({ error: 'Dates already confirmed for another booking' }, { status: 409 });
-    }
-    
-    // Calculate price
-    const nights = Math.ceil(
-      (new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24)
-    );
-    
-    let totalPrice = customPrice;
-    if (!totalPrice && property.nightly_rate) {
-      totalPrice = (nights * property.nightly_rate) + (property.cleaning_fee || 0);
-    }
-    
-    if (!totalPrice) {
-      return NextResponse.json({ error: 'Price required' }, { status: 400 });
-    }
-    
-    // Generate payment link token using native crypto
-    const paymentLinkToken = crypto.randomUUID();
-    const externalUid = `direct-host-${crypto.randomUUID()}`;
-    
-    // Create booking (using service role to ensure it bypasses any restrictive RLS)
-    const { data: booking, error: insertError } = await serviceRoleClient
-      .from('bookings')
-      .insert({
-        workspace_id: property.workspace_id,
-        property_id: propertyId,
-        guest_name: guestName,
-        check_in: `${checkIn}T12:00:00Z`,
-        check_out: `${checkOut}T12:00:00Z`,
-        external_uid: externalUid,
-        source: 'direct',
-        status: 'pending_payment',
-        is_active: true,
-        guest_email: guestEmail,
-        guest_phone: guestPhone || null,
-        total_price: totalPrice,
-        payment_link_token: paymentLinkToken,
-        created_by_user_id: user.id,
-        notes: notes || null,
-        guest_count: guestCount || 1,
-      })
-      .select()
-      .single();
-    
-    if (insertError) {
-      console.error('Failed to create booking:', insertError);
-      return NextResponse.json({ error: 'Failed to create booking' }, { status: 500 });
-    }
-    
-    const paymentUrl = `${process.env.NEXT_PUBLIC_APP_URL}/pay/${paymentLinkToken}`;
-    
-    return NextResponse.json({
-      booking,
-      paymentUrl,
-      paymentLinkToken,
-    });
-    
-  } catch (error: any) {
-    console.error('Create booking error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { data: membership } = await supabase
+    .from('cohost_workspace_members')
+    .select('workspace_id, role')
+    .eq('user_id', user.id)
+    .single();
+
+  if (!membership || !['owner', 'manager', 'admin'].includes(membership.role)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+
+  const { 
+    propertyId, 
+    checkIn, 
+    checkOut, 
+    guestCount,
+    guestFirstName,
+    guestLastName,
+    guestEmail,
+    guestPhone,
+    source,
+    notes,
+    totalPrice, // Optional: override calculated price
+  } = body;
+
+  if (!propertyId || !checkIn || !checkOut || !guestFirstName) {
+    return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+  }
+
+  // Check for overlapping bookings
+  const { data: overlapping } = await supabase
+    .from('bookings')
+    .select('id')
+    .eq('property_id', propertyId)
+    .eq('is_active', true)
+    .lt('check_in', checkOut)
+    .gt('check_out', checkIn)
+    .limit(1);
+
+  if (overlapping && overlapping.length > 0) {
+    return NextResponse.json({ error: 'Dates overlap with existing booking' }, { status: 409 });
+  }
+
+  // Calculate price if not provided
+  let finalPrice = totalPrice;
+  if (!finalPrice) {
+    try {
+      const priceBreakdown = await calculatePrice({
+        propertyId,
+        checkIn: new Date(checkIn),
+        checkOut: new Date(checkOut),
+        guestCount: guestCount || 1,
+        workspaceId: membership.workspace_id,
+      }, supabase);
+      finalPrice = priceBreakdown.grandTotal;
+    } catch (e) {
+      // Price calculation optional for instant booking
+      console.log('Price calculation failed, proceeding without price');
+    }
+  }
+
+  const guestName = `${guestFirstName} ${guestLastName || ''}`.trim();
+
+  // Create booking directly (no hold, no payment)
+  const { data: booking, error } = await supabase
+    .from('bookings')
+    .insert({
+      workspace_id: membership.workspace_id,
+      property_id: propertyId,
+      check_in: checkIn,
+      check_out: checkOut,
+      guest_name: guestName,
+      guest_count: guestCount || 1,
+      guest_email: guestEmail || null,
+      guest_phone: guestPhone || null,
+      total_price: finalPrice || null,
+      status: 'confirmed',
+      source: 'direct',
+      source_type: 'direct',
+      platform: source || 'Direct Booking',
+      is_active: true,
+      created_by_user_id: user.id,
+      notes: notes || null,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Failed to create booking:', error);
+    return NextResponse.json({ error: error.message }, { status: 400 });
+  }
+
+  return NextResponse.json(booking);
 }
