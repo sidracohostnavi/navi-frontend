@@ -14,6 +14,7 @@ const STEPS = [
     { title: 'Amenities', id: 'amenities' },
     { title: 'Rules', id: 'rules' },
     { title: 'Check-in', id: 'checkin' },
+    { title: 'Pricing & Policies', id: 'pricing' },
     { title: 'Additional Details', id: 'ai-context' },
     { title: 'Review', id: 'review' }
 ];
@@ -80,8 +81,36 @@ function NewPropertyWizardInner() {
         checkInInstructions: '',
 
         // AI Context
-        aiNotes: ''
+        aiNotes: '',
+
+        // Pricing & Policies
+        nightlyRate: '',
+        cleaningFee: '',
+        policyId: ''
     });
+
+    const [policies, setPolicies] = useState<any[]>([]);
+
+    useEffect(() => {
+        fetchPolicies();
+    }, []);
+
+    const fetchPolicies = async () => {
+        try {
+            const res = await fetch('/api/cohost/policies');
+            if (res.ok) {
+                const data = await res.json();
+                setPolicies(data);
+                // Set default policy if one exists
+                const defaultPolicy = data.find((p: any) => p.is_default);
+                if (defaultPolicy) {
+                    updateData({ policyId: defaultPolicy.id });
+                }
+            }
+        } catch (e) {
+            console.error('Failed to fetch policies');
+        }
+    };
 
     useEffect(() => {
         const url = searchParams.get('importUrl');
@@ -235,7 +264,7 @@ function NewPropertyWizardInner() {
                 membershipData = { workspace_id: existingWs.id };
             }
 
-            const { error } = await supabase.from('cohost_properties').insert({
+            const propertyInsertData = {
                 workspace_id: membershipData.workspace_id,
                 name: formData.name,
                 property_type: formData.propertyType,
@@ -255,8 +284,22 @@ function NewPropertyWizardInner() {
                 check_out_time: formData.checkOutTime,
                 entry_method: formData.entryMethod,
                 check_in_instructions: formData.checkInInstructions,
-                ai_notes: formData.aiNotes
-            });
+                ai_notes: formData.aiNotes,
+                nightly_rate: formData.nightlyRate ? Math.round(parseFloat(formData.nightlyRate) * 100) : null,
+                base_nightly_rate: formData.nightlyRate ? parseFloat(formData.nightlyRate) : null,
+                cleaning_fee: formData.cleaningFee ? Math.round(parseFloat(formData.cleaningFee) * 100) : 0,
+                policy_id: formData.policyId || null,
+                min_nights: 1 // Default
+            };
+
+            let { error } = await supabase.from('cohost_properties').insert(propertyInsertData);
+
+            // FALLBACK: If policy_id is missing from schema, retry without it
+            if (error && error.message.includes('policy_id')) {
+                const { policy_id, ...safeInsertData } = propertyInsertData;
+                const retry = await supabase.from('cohost_properties').insert(safeInsertData);
+                error = retry.error;
+            }
 
             if (error) throw error;
 
@@ -568,7 +611,75 @@ function NewPropertyWizardInner() {
                         </div>
                     </div>
                 );
-            case 6: // AI Context
+            case 6: // Pricing & Policies
+                return (
+                    <div className="space-y-8 animate-fadeIn">
+                        <div>
+                            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">Base Pricing</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Nightly Rate ($) *</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                                        value={formData.nightlyRate}
+                                        onChange={e => updateData({ nightlyRate: e.target.value })}
+                                        placeholder="150.00"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">Global base rate for this property</p>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Cleaning Fee ($)</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
+                                        value={formData.cleaningFee}
+                                        onChange={e => updateData({ cleaningFee: e.target.value })}
+                                        placeholder="75.00"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">Booking Policy</h3>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Select Policy *</label>
+                                <select
+                                    className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none bg-white font-medium"
+                                    value={formData.policyId}
+                                    onChange={e => updateData({ policyId: e.target.value })}
+                                >
+                                    <option value="">-- Select a Policy --</option>
+                                    {policies.map(p => (
+                                        <option key={p.id} value={p.id}>{p.name} {p.is_default ? '(Default)' : ''}</option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-gray-500 mt-2">
+                                    Policies define your cancellation and payment terms. Manage them in <Link href="/cohost/settings/policies" className="text-blue-600 underline">Settings</Link>.
+                                </p>
+                            </div>
+
+                            {formData.policyId && (
+                                <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200 text-sm space-y-3">
+                                    <div className="flex justify-between">
+                                        <span className="text-gray-500">Wait Period:</span>
+                                        <span className="font-medium text-gray-900">{policies.find(p => p.id === formData.policyId)?.quote_expiry_hours} hours</span>
+                                    </div>
+                                    <div className="border-t pt-2">
+                                        <span className="text-gray-500 block mb-1">Cancellation Rule:</span>
+                                        <span className="text-gray-700 leading-snug">{policies.find(p => p.id === formData.policyId)?.cancellation_policy || 'None'}</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                );
+            case 7: // AI Context
                 return (
                     <div className="space-y-6 animate-fadeIn">
                         <div>
@@ -598,6 +709,8 @@ function NewPropertyWizardInner() {
                                 <div><dt className="text-gray-500">Type</dt><dd className="font-medium">{formData.propertyType}</dd></div>
                                 <div><dt className="text-gray-500">Location</dt><dd className="font-medium">{[formData.streetAddress, formData.city, formData.state].filter(Boolean).join(', ') || '-'}</dd></div>
                                 <div><dt className="text-gray-500">Capacity</dt><dd className="font-medium">{formData.maxGuests} Guests • {formData.bedrooms} BR • {formData.beds} Beds</dd></div>
+                                <div><dt className="text-gray-500">Pricing</dt><dd className="font-medium text-teal-600">${formData.nightlyRate || '0'}/night • ${formData.cleaningFee || '0'} Clean</dd></div>
+                                <div><dt className="text-gray-500">Policy</dt><dd className="font-medium">{policies.find(p => p.id === formData.policyId)?.name || 'None'}</dd></div>
                                 <div><dt className="text-gray-500">Amenities</dt><dd className="font-medium">{formData.amenities.length} selected</dd></div>
                                 <div><dt className="text-gray-500">Check-in</dt><dd className="font-medium">
                                     {(() => {

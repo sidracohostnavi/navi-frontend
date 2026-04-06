@@ -9,13 +9,30 @@ export async function GET(
   const supabase = await createClient();
   const { id } = await params;
   
-  const { data, error } = await supabase
+  const { data, error: fetchError } = await supabase
     .from('cohost_properties')
-    .select('id, name, base_nightly_rate, currency, min_nights, max_guests, base_guests_included, extra_guest_fee')
+    .select('id, name, base_nightly_rate, nightly_rate, cleaning_fee, currency, min_nights, max_nights, max_guests, base_guests_included, extra_guest_fee, additional_fees, taxes')
     .eq('id', id)
     .single();
     
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (fetchError && fetchError.message.includes('column')) {
+    const { data: retryData, error: retryError } = await supabase
+      .from('cohost_properties')
+      .select('id, name, base_nightly_rate, nightly_rate, cleaning_fee, currency, min_nights, max_guests, base_guests_included, extra_guest_fee')
+      .eq('id', id)
+      .single();
+    
+    if (retryData) {
+      return NextResponse.json({
+        ...retryData,
+        max_nights: 30,
+        additional_fees: [],
+        taxes: []
+      });
+    }
+  }
+
+  if (fetchError) return NextResponse.json({ error: fetchError.message }, { status: 400 });
   return NextResponse.json(data);
 }
 
@@ -45,9 +62,18 @@ export async function PUT(
   if (body.base_nightly_rate !== undefined) updatePayload.base_nightly_rate = body.base_nightly_rate;
   if (body.currency !== undefined) updatePayload.currency = body.currency;
   if (body.min_nights !== undefined) updatePayload.min_nights = body.min_nights;
+  if (body.max_nights !== undefined) updatePayload.max_nights = body.max_nights;
   if (body.max_guests !== undefined) updatePayload.max_guests = body.max_guests;
   if (body.base_guests_included !== undefined) updatePayload.base_guests_included = body.base_guests_included;
   if (body.extra_guest_fee !== undefined) updatePayload.extra_guest_fee = body.extra_guest_fee;
+  if (body.cleaning_fee !== undefined) updatePayload.cleaning_fee = body.cleaning_fee;
+  if (body.additional_fees !== undefined) updatePayload.additional_fees = body.additional_fees;
+  if (body.taxes !== undefined) updatePayload.taxes = body.taxes;
+  
+  // SYNC: If base_nightly_rate is updated, sync it to nightly_rate (in cents)
+  if (body.base_nightly_rate !== undefined) {
+    updatePayload.nightly_rate = body.base_nightly_rate ? Math.round(body.base_nightly_rate * 100) : null;
+  }
 
   const { data, error } = await supabaseService
     .from('cohost_properties')

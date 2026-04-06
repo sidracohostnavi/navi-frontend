@@ -24,10 +24,21 @@ interface HoldData {
   policy?: {
     payment_policy?: string;
     cancellation_policy?: string;
+    rental_agreement_text?: string;
   };
 }
 
-function CheckoutForm({ holdId, onSuccess }: { holdId: string; onSuccess: () => void }) {
+function CheckoutForm({ 
+  holdId, 
+  onSuccess,
+  requiresAgreement,
+  hasAgreed,
+}: { 
+  holdId: string; 
+  onSuccess: () => void;
+  requiresAgreement: boolean;
+  hasAgreed: boolean;
+}) {
   const stripe = useStripe();
   const elements = useElements();
   const [isProcessing, setIsProcessing] = useState(false);
@@ -72,11 +83,17 @@ function CheckoutForm({ holdId, onSuccess }: { holdId: string; onSuccess: () => 
 
       <button
         type="submit"
-        disabled={!stripe || isProcessing}
-        className="w-full py-4 bg-teal-500 text-white rounded-lg font-semibold text-lg hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed"
+        disabled={!stripe || isProcessing || (requiresAgreement && !hasAgreed)}
+        className="w-full py-4 bg-teal-500 text-white rounded-lg font-semibold text-lg hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
       >
         {isProcessing ? 'Processing...' : 'Pay Now'}
       </button>
+
+      {requiresAgreement && !hasAgreed && (
+        <p className="text-sm text-amber-600 text-center font-medium animate-pulse">
+           Please read and accept the terms to continue
+        </p>
+      )}
     </form>
   );
 }
@@ -90,6 +107,8 @@ function CheckoutContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentComplete, setPaymentComplete] = useState(false);
+  const [hasAgreed, setHasAgreed] = useState(false);
+  const [showFullAgreement, setShowFullAgreement] = useState(false);
 
   useEffect(() => {
     const initCheckout = async () => {
@@ -285,26 +304,93 @@ function CheckoutContent() {
               )}
             </div>
 
-            {/* Policies */}
-            {hold.policy && (
+            {/* Policies & Agreement Section */}
+            {hold.policy && (hold.policy.cancellation_policy || hold.policy.payment_policy || hold.policy.rental_agreement_text) && (
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-                <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
                   <span className="text-teal-500">📋</span>
-                  Policies
+                  Terms & Conditions
                 </h2>
-                <div className="space-y-4">
+                
+                <div className="space-y-6">
+                  {/* Cancellation Policy */}
                   {hold.policy.cancellation_policy && (
                     <div>
                       <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Cancellation Policy</h3>
-                      <p className="text-gray-700 leading-relaxed">{hold.policy.cancellation_policy}</p>
+                      <p className="text-gray-700 leading-relaxed text-sm bg-gray-50 p-4 rounded-lg border border-gray-100">
+                        {hold.policy.cancellation_policy}
+                      </p>
                     </div>
                   )}
+                  
+                  {/* Payment Policy */}
                   {hold.policy.payment_policy && (
                     <div>
-                      <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Payment Terms</h3>
-                      <p className="text-gray-700 leading-relaxed">{hold.policy.payment_policy}</p>
+                      <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Payment Policy</h3>
+                      <p className="text-gray-700 leading-relaxed text-sm bg-gray-50 p-4 rounded-lg border border-gray-100">
+                        {hold.policy.payment_policy}
+                      </p>
                     </div>
                   )}
+                  
+                  {/* Rental Agreement */}
+                  {hold.policy.rental_agreement_text && (
+                    <div>
+                      <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Rental Agreement</h3>
+                      
+                      {/* Collapsed/Expanded view */}
+                      {!showFullAgreement ? (
+                        <div className="relative group">
+                          <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-5 max-h-32 overflow-hidden border border-gray-100 italic font-mono leading-relaxed">
+                            <pre className="whitespace-pre-wrap font-sans">
+                              {hold.policy.rental_agreement_text.substring(0, 400)}
+                              {hold.policy.rental_agreement_text.length > 400 && '...'}
+                            </pre>
+                            <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-gray-50 to-transparent" />
+                          </div>
+                          <button
+                            onClick={() => setShowFullAgreement(true)}
+                            className="text-teal-600 hover:text-teal-700 text-sm font-bold mt-2 flex items-center gap-1 transition-colors"
+                          >
+                            Read Full Agreement <span className="text-lg">→</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="text-sm text-gray-600 bg-gray-50 rounded-lg p-6 max-h-[500px] overflow-y-auto border border-gray-200 shadow-inner font-mono leading-relaxed">
+                            <pre className="whitespace-pre-wrap font-sans">
+                              {hold.policy.rental_agreement_text}
+                            </pre>
+                          </div>
+                          <button
+                            onClick={() => setShowFullAgreement(false)}
+                            className="text-gray-500 hover:text-gray-700 text-sm font-bold mt-2 flex items-center gap-1 transition-colors"
+                          >
+                            <span className="text-lg">←</span> Collapse Agreement
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Agreement Checkbox */}
+                  <div className="mt-8 pt-6 border-t border-gray-100">
+                    <label className="flex items-start gap-4 cursor-pointer group p-4 bg-teal-50/50 rounded-xl border border-teal-100/50 hover:bg-teal-50 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={hasAgreed}
+                        onChange={(e) => setHasAgreed(e.target.checked)}
+                        className="mt-1 h-6 w-6 rounded border-gray-300 text-teal-500 focus:ring-teal-500 transition-all cursor-pointer"
+                      />
+                      <span className="text-sm text-gray-700 leading-relaxed font-medium">
+                        I confirm that I have read and agree to the{' '}
+                        {hold.policy.cancellation_policy && <span className="text-teal-700 font-bold">cancellation policy</span>}
+                        {hold.policy.cancellation_policy && hold.policy.rental_agreement_text && ' and '}
+                        {hold.policy.rental_agreement_text && <span className="text-teal-700 font-bold">rental agreement</span>}
+                        . I understand and accept all terms and conditions of this stay.
+                      </span>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
@@ -339,6 +425,8 @@ function CheckoutContent() {
                 <CheckoutForm 
                   holdId={hold.id} 
                   onSuccess={() => setPaymentComplete(true)} 
+                  requiresAgreement={!!(hold.policy?.cancellation_policy || hold.policy?.rental_agreement_text)}
+                  hasAgreed={hasAgreed}
                 />
               </Elements>
 

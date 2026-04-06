@@ -47,6 +47,20 @@ Loop 2 (Direct): Guest → Public Booking Page → Stripe Payment → Booking Cr
 
 ---
 
+## Design & Branding
+
+Navi CoHost follows a specific brand color palette. All new features and UI updates **MUST** adhere to these colors to maintain brand consistency.
+
+| Element | Hex Code | Purpose |
+| --------- | -------- | ------- |
+| **Brand Teal** | `#008080` | Primary actions, active states, and headings |
+| **Brand Coral** | `#FF5A5F` | "AI Co-Host" accents, status alerts, and highlights |
+
+> [!IMPORTANT]
+> **Strict Adherence:** Do not use generic Tailwind color classes (e.g., `teal-600`, `blue-500`) for primary UI elements. Always use the brand hex codes directly or via defined theme variables to ensure a premium, consistent look across the application.
+
+---
+
 ## System Overview
 
 ### What It Does

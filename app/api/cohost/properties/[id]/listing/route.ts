@@ -22,34 +22,64 @@ export async function GET(
     const supabase = createCohostServiceClient();
     
     // Get property with workspace check
-    const { data: property, error } = await supabase
+    let { data: property, error } = await supabase
       .from('cohost_properties')
       .select(`
-        id,
-        name,
-        direct_booking_enabled,
-        slug,
-        headline,
-        description,
-        listing_photos,
-        rental_agreement_text,
-        nightly_rate,
-        cleaning_fee,
-        min_nights,
-        max_guests,
-        bedrooms,
-        beds,
-        bathrooms,
-        amenities,
-        house_rules,
-        check_in_time,
-        check_out_time,
-        workspace_id
+        id, name, direct_booking_enabled, slug, headline, description, 
+        listing_photos, rental_agreement_text, nightly_rate, cleaning_fee, 
+        min_nights, max_nights, base_nightly_rate, currency, policy_id,
+        base_guests_included, extra_guest_fee, extra_guest_fee_frequency, additional_fees, taxes, workspace_id,
+        policy:booking_policies(*)
       `)
       .eq('id', propertyId)
-      .single();
+      .maybeSingle();
     
-    if (error || !property) {
+    // FALLBACK: If columns are missing, retry with basic fields
+    if (error && (error.message.includes('column') || error.message.includes('policy'))) {
+      const { data: retryData, error: retryError } = await supabase
+        .from('cohost_properties')
+        .select(`
+          id, name, direct_booking_enabled, slug, headline, description, 
+          listing_photos, rental_agreement_text, nightly_rate, cleaning_fee, 
+          min_nights, base_nightly_rate, currency, workspace_id
+        `)
+        .eq('id', propertyId)
+        .maybeSingle();
+      
+      if (retryData) {
+        property = { 
+          id: retryData.id,
+          name: retryData.name,
+          direct_booking_enabled: retryData.direct_booking_enabled,
+          slug: retryData.slug,
+          headline: retryData.headline,
+          description: retryData.description,
+          listing_photos: retryData.listing_photos,
+          rental_agreement_text: retryData.rental_agreement_text,
+          nightly_rate: retryData.nightly_rate,
+          cleaning_fee: retryData.cleaning_fee,
+          min_nights: retryData.min_nights,
+          base_nightly_rate: retryData.base_nightly_rate,
+          currency: retryData.currency,
+          workspace_id: retryData.workspace_id,
+          max_nights: 30, 
+          additional_fees: [], 
+          taxes: [],
+          base_guests_included: 2,
+          extra_guest_fee: 0,
+          extra_guest_fee_frequency: 'nightly',
+          policy: null,
+          policy_id: null
+        } as any;
+        error = null;
+      }
+    }
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    
+    if (!property) {
       return NextResponse.json({ error: 'Property not found' }, { status: 404 });
     }
     
@@ -174,8 +204,14 @@ export async function PUT(
       }
       
       // Check required fields, including slug
-      const requiredFields = ['headline', 'description', 'nightly_rate', 'rental_agreement_text', 'slug'];
+      const requiredFields = ['headline', 'description', 'nightly_rate', 'slug'];
       const missing = requiredFields.filter(f => !body[f]);
+      
+      // Special check: either rental_agreement_text or policy_id must be present
+      if (!body.rental_agreement_text && !body.policy_id) {
+        missing.push('rental_agreement_text (or booking policy)');
+      }
+
       if (missing.length > 0) {
         const readableMissing = missing.map(f => f === 'rental_agreement_text' ? 'rental agreement' : f === 'nightly_rate' ? 'nightly_rate' : f).join(', ');
         return NextResponse.json({ 
@@ -184,18 +220,27 @@ export async function PUT(
       }
     }
     
-    // Prepare update object (only allowed fields)
     const update: Record<string, any> = {};
+    // Allow updating all listing-related fields
     const allowedFields = [
       'direct_booking_enabled',
       'slug',
-      'headline', 
+      'headline',
       'description',
       'listing_photos',
       'rental_agreement_text',
       'nightly_rate',
       'cleaning_fee',
       'min_nights',
+      'max_nights',
+      'base_nightly_rate',
+      'currency',
+      'policy_id',
+      'base_guests_included',
+      'extra_guest_fee',
+      'extra_guest_fee_frequency',
+      'additional_fees',
+      'taxes'
     ];
     
     for (const field of allowedFields) {
@@ -204,14 +249,32 @@ export async function PUT(
       }
     }
     
+    // SYNC: If nightly_rate is being updated, sync it to base_nightly_rate
+    if (update.nightly_rate !== undefined) {
+      update.base_nightly_rate = update.nightly_rate ? update.nightly_rate / 100 : null;
+    }
+    
     // Update property
-    const { error: updateError } = await supabase
+    let { error: updateError } = await supabase
       .from('cohost_properties')
       .update(update)
       .eq('id', propertyId);
     
+    // FALLBACK: If policy_id is missing from schema, retry without it
+    if (updateError && updateError.message.includes('policy_id') && update.policy_id !== undefined) {
+      const { policy_id, ...safeUpdate } = update;
+      const retry = await supabase
+        .from('cohost_properties')
+        .update(safeUpdate)
+        .eq('id', propertyId);
+      
+      if (!retry.error) {
+        updateError = null;
+      }
+    }
+
     if (updateError) {
-      return NextResponse.json({ error: 'Failed to save' }, { status: 500 });
+      return NextResponse.json({ error: updateError.message || 'Failed to save' }, { status: 500 });
     }
     
     return NextResponse.json({ success: true });

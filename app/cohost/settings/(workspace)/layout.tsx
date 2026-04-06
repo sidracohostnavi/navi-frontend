@@ -11,21 +11,11 @@ import {
     CreditCard,
     User,
     HelpCircle,
-    Home
+    Home,
+    FileText
 } from 'lucide-react';
 import { SIDEBAR_PERMISSION_MAP, getPermissionsForRole, type FeaturePermissions } from '@/lib/roles/roleConfig';
-
-const SIDEBAR_ITEMS = [
-    { name: 'Connections', href: '/cohost/settings/connections', icon: ConnIcon },
-    { name: 'Calendar Sync', href: '/cohost/settings/calendar', icon: Calendar },
-    { name: 'Properties', href: '/cohost/settings/properties', icon: Home },
-    { name: 'Pricing & Fees', href: '/cohost/settings/pricing', icon: CreditCard },
-    { name: 'Team Members', href: '/cohost/settings/team', icon: Users },
-    { name: 'Notification Preferences', href: '/cohost/settings/notifications', icon: Bell },
-    { name: 'Billing', href: '/cohost/settings/billing', icon: CreditCard },
-    { name: 'Profile', href: '/cohost/settings/profile', icon: User },
-    { name: 'Support', href: '/cohost/settings/support', icon: HelpCircle },
-];
+import { SETTINGS_NAV_ITEMS } from '../constants';
 
 export default function SettingsWorkspaceLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
@@ -51,7 +41,7 @@ export default function SettingsWorkspaceLayout({ children }: { children: React.
 
     // Filter sidebar items based on role permissions
     const visibleItems = permissions
-        ? SIDEBAR_ITEMS.filter(item => {
+        ? SETTINGS_NAV_ITEMS.filter(item => {
             const permKey = SIDEBAR_PERMISSION_MAP[item.href];
             if (!permKey) return true; // No mapping = always visible
             return permissions[permKey];

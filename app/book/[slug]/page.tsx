@@ -20,6 +20,13 @@ type Listing = {
   checkInTime: string;
   checkOutTime: string;
   location: string;
+  policy: {
+    name: string;
+    payment_policy: string;
+    cancellation_policy: string;
+    rental_agreement_text: string;
+    quote_expiry_hours: number;
+  } | null;
 };
 
 export default function PublicBookingPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -291,6 +298,53 @@ export default function PublicBookingPage({ params }: { params: Promise<{ slug: 
                   </div>
               )}
             </div>
+
+            {/* Policies and Terms */}
+            {listing.policy && (
+              <div className="border-t border-gray-200 pt-8">
+                <h2 className="text-xl font-semibold text-gray-900 mb-6 font-display">Policies & Terms</h2>
+                <div className="bg-gray-50 rounded-2xl p-6 border border-gray-100 space-y-6">
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <svg className="w-4 h-4 text-[#FA5A5A]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Cancellation Policy
+                    </h3>
+                    <p className="text-gray-700 leading-relaxed text-sm">{listing.policy.cancellation_policy}</p>
+                  </div>
+                  
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <svg className="w-4 h-4 text-[#FA5A5A]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                      </svg>
+                      Payment Terms
+                    </h3>
+                    <p className="text-gray-700 leading-relaxed text-sm">{listing.policy.payment_policy}</p>
+                  </div>
+
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest mb-3 flex items-center gap-2">
+                       <svg className="w-4 h-4 text-[#FA5A5A]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Rental Agreement
+                    </h3>
+                    <div className="bg-white border border-gray-200 rounded-xl p-4 max-h-48 overflow-y-auto text-xs text-gray-600 font-mono whitespace-pre-wrap leading-relaxed shadow-inner">
+                      {listing.policy.rental_agreement_text}
+                    </div>
+                  </div>
+                  
+                  <div className="pt-2 flex items-center gap-2 text-xs text-gray-500 italic">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    By clicking "Reserve", you agree to the policies and rental agreement above.
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           
           {/* Right Column - Booking Card */}

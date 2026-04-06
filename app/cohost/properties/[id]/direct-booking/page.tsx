@@ -31,14 +31,55 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
     nightly_rate: '',
     cleaning_fee: '',
     min_nights: '1',
+    max_nights: '30',
+    base_guests_included: '2',
+    max_guests: '4',
+    extra_guest_fee: '',
+    extra_guest_fee_frequency: 'night',
+    policy_id: '',
+    additional_fees: [] as { name: string; amount: string; type: 'fixed' | 'percentage'; frequency: 'night' | 'stay' }[],
+    taxes: [] as { name: string; amount: string; type: 'fixed' | 'percentage' }[],
   });
+
+  const [initialData, setInitialData] = useState<any>(null);
+  const isDirty = initialData && JSON.stringify(form) !== JSON.stringify(initialData);
+
+  const [policies, setPolicies] = useState<any[]>([]);
+  const [globalTaxes, setGlobalTaxes] = useState<any[]>([]);
   
   const [propertyName, setPropertyName] = useState('');
   
   useEffect(() => {
     fetchListing();
+    fetchPolicies();
+    fetchGlobalTaxes();
     checkEmail();
   }, [propertyId]);
+
+  const fetchPolicies = async () => {
+    try {
+      const res = await fetch('/api/cohost/policies');
+      if (res.ok) {
+        const data = await res.json();
+        setPolicies(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch policies');
+    }
+  };
+
+  const fetchGlobalTaxes = async () => {
+    try {
+      const res = await fetch('/api/cohost/fees');
+      if (res.ok) {
+        const data = await res.json();
+        // Filter for taxes only
+        setGlobalTaxes(data.filter((f: any) => f.is_tax));
+      }
+    } catch (e) {
+      console.error('Failed to fetch global taxes');
+    }
+  };
   
   const checkEmail = async () => {
     const supabase = createClient();
@@ -66,7 +107,7 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
       });
       
       // Set form values
-      setForm({
+      const initialForm = {
         direct_booking_enabled: data.property.direct_booking_enabled || false,
         slug: data.property.slug || generateSlug(data.property.name),
         headline: data.property.headline || '',
@@ -76,7 +117,18 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
         nightly_rate: data.property.nightly_rate ? String(data.property.nightly_rate / 100) : '',
         cleaning_fee: data.property.cleaning_fee ? String(data.property.cleaning_fee / 100) : '',
         min_nights: String(data.property.min_nights || 1),
-      });
+        max_nights: String(data.property.max_nights || 30),
+        base_guests_included: String(data.property.base_guests_included || 2),
+        max_guests: String(data.property.max_guests || 4),
+        extra_guest_fee: data.property.extra_guest_fee ? String(data.property.extra_guest_fee) : '',
+        extra_guest_fee_frequency: data.property.extra_guest_fee_frequency === 'stay' ? 'stay' : 'night',
+        policy_id: data.property.policy_id || '',
+        // @ts-ignore
+        additional_fees: data.property.additional_fees?.map(f => ({ ...f, frequency: f.frequency === 'nightly' ? 'night' : f.frequency })) || [],
+        taxes: data.property.taxes || [],
+      };
+      setForm(initialForm);
+      setInitialData(initialForm);
       
     } catch (err) {
       setError('Failed to load listing data');
@@ -152,6 +204,11 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
         nightly_rate: form.nightly_rate ? Math.round(parseFloat(form.nightly_rate) * 100) : null,
         cleaning_fee: form.cleaning_fee ? Math.round(parseFloat(form.cleaning_fee) * 100) : 0,
         min_nights: parseInt(form.min_nights) || 1,
+        max_nights: parseInt(form.max_nights) || 30,
+        base_guests_included: parseInt(form.base_guests_included) || 2,
+        max_guests: parseInt(form.max_guests) || 4,
+        extra_guest_fee: form.extra_guest_fee ? parseFloat(form.extra_guest_fee) : 0,
+        extra_guest_fee_frequency: form.extra_guest_fee_frequency === 'night' ? 'nightly' : 'stay',
       };
       
       const res = await fetch(`/api/cohost/properties/${propertyId}/listing`, {
@@ -169,7 +226,11 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
       
       setSuccess('Saved successfully!');
       if (enableAfterSave) {
-        setForm(f => ({ ...f, direct_booking_enabled: true }));
+        const updated = { ...form, direct_booking_enabled: true };
+        setForm(updated);
+        setInitialData(updated);
+      } else {
+        setInitialData(form);
       }
       
       setTimeout(() => setSuccess(''), 3000);
@@ -206,7 +267,7 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 p-8 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500" />
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#008080]" />
       </div>
     );
   }
@@ -215,31 +276,6 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
   
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
-        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href={`/cohost/properties/${propertyId}`} className="text-gray-400 hover:text-gray-600">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </Link>
-            <div>
-              <h1 className="font-semibold text-gray-900">Direct Booking</h1>
-              <p className="text-sm text-gray-500">{propertyName}</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-3">
-            {form.direct_booking_enabled && (
-              <span className="px-3 py-1 bg-green-100 text-green-800 text-sm font-medium rounded-full">
-                Live
-              </span>
-            )}
-          </div>
-        </div>
-      </header>
-      
       <div className="max-w-4xl mx-auto px-4 py-8 pb-32">
         {/* Stripe Warning */}
         {!stripeConnected && (
@@ -286,23 +322,23 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
         
         {/* Live URL */}
         {form.direct_booking_enabled && (
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-            <p className="text-sm font-medium text-blue-900 mb-1">Your booking page is live:</p>
+          <div className="bg-[#008080]/5 border border-[#008080]/20 rounded-lg p-4 mb-6">
+            <p className="text-sm font-medium text-[#008080] mb-1">Your booking page is live:</p>
             <div className="flex items-center gap-2">
               <a 
                 href={bookingUrl} 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="text-blue-600 hover:underline break-all"
+                className="text-[#008080] hover:underline break-all"
               >
                 {bookingUrl}
               </a>
               <button
                 onClick={() => navigator.clipboard.writeText(bookingUrl)}
-                className="p-1 hover:bg-blue-100 rounded"
+                className="p-1 hover:bg-[#008080]/10 rounded"
                 title="Copy URL"
               >
-                <svg className="w-5 h-5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 text-[#008080]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
               </button>
@@ -329,11 +365,11 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
                     setForm(f => ({ ...f, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }));
                     setSlugStatus('idle');
                   }}
-                  className={`flex-1 rounded-lg border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none ${slugStatus === 'taken' ? 'border-red-300 bg-red-50' : slugStatus === 'available' ? 'border-green-300 bg-green-50' : 'border-gray-300'}`}
+                  className={`flex-1 rounded-lg border px-4 py-2 focus:ring-2 focus:ring-[#008080]/30 outline-none ${slugStatus === 'taken' ? 'border-red-300 bg-red-50' : slugStatus === 'available' ? 'border-green-300 bg-green-50' : 'border-gray-300'}`}
                   placeholder="my-property"
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                   {slugStatus === 'checking' && <div className="w-4 h-4 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin"></div>}
+                   {slugStatus === 'checking' && <div className="w-4 h-4 border-2 border-gray-300 border-t-[#008080] rounded-full animate-spin"></div>}
                    {slugStatus === 'available' && <svg className="w-5 h-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>}
                 </div>
               </div>
@@ -365,183 +401,23 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
             </div>
           </section>
 
-          {/* iCal Export */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <svg className="w-5 h-5 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              iCal Export
-            </h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Share this URL with Airbnb, VRBO, or other platforms to sync your Navi bookings:
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                readOnly
-                value={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/public/ical/${propertyId}`}
-                className="flex-1 border rounded-lg px-4 py-2 text-sm bg-gray-50 focus:ring-2 focus:ring-blue-500 outline-none truncate"
-              />
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/api/public/ical/${propertyId}`);
-                  setSuccess('iCal URL copied to clipboard!');
-                  setTimeout(() => setSuccess(''), 3000);
-                }}
-                className="px-4 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors text-sm flex items-center gap-2 whitespace-nowrap active:scale-95 shadow-sm"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-                Copy URL
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-4 leading-relaxed">
-              This feed includes all confirmed direct bookings. <span className="font-semibold">Note:</span> iCal imports from other platforms are not re-exported to prevent synchronization loops.
-            </p>
-          </section>
-          
-          {/* Listing Content */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Listing Content</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Headline *
-                </label>
-                <input
-                  type="text"
-                  value={form.headline}
-                  onChange={e => setForm(f => ({ ...f, headline: e.target.value }))}
-                  className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                  placeholder="Beautiful beachfront cottage with stunning views"
-                  maxLength={100}
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Description *
-                </label>
-                <textarea
-                  value={form.description}
-                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none h-40"
-                  placeholder="Describe your property..."
-                />
-              </div>
-            </div>
-          </section>
-          
-          {/* Pricing */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Pricing</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nightly Rate *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.nightly_rate}
-                    onChange={e => setForm(f => ({ ...f, nightly_rate: e.target.value }))}
-                    className="w-full rounded-lg border-gray-300 border pl-7 pr-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder="150.00"
-                  />
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Cleaning Fee
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">$</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.cleaning_fee}
-                    onChange={e => setForm(f => ({ ...f, cleaning_fee: e.target.value }))}
-                    className="w-full rounded-lg border-gray-300 border pl-7 pr-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                    placeholder="75.00"
-                  />
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Minimum Nights
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={form.min_nights}
-                  onChange={e => setForm(f => ({ ...f, min_nights: e.target.value }))}
-                  className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-              </div>
-            </div>
-          </section>
-          
-          {/* Rental Agreement */}
-          <section className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Rental Agreement</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Guests must accept this agreement before completing their booking.
-            </p>
-            <textarea
-              value={form.rental_agreement_text}
-              onChange={e => setForm(f => ({ ...f, rental_agreement_text: e.target.value }))}
-              className="w-full rounded-lg border-gray-300 border px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none h-64 font-mono text-sm"
-              placeholder="Enter your rental agreement terms..."
-            />
-          </section>
           
         </div>
       </div>
-      
-      {/* Footer Actions */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 z-40">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div>
-            {form.direct_booking_enabled && (
-              <button
-                onClick={handleDisable}
-                disabled={saving}
-                className="text-red-600 hover:text-red-800 text-sm font-medium"
-              >
-                Disable Direct Booking
-              </button>
-            )}
-          </div>
-          
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => handleSave(false)}
-              disabled={saving}
-              className="px-6 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Draft'}
-            </button>
-            
-            {!form.direct_booking_enabled && stripeConnected && (
-              <button
-                onClick={() => handleSave(true)}
-                disabled={saving || !emailConfirmed}
-                className="px-6 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
-              >
-                Save & Enable
-              </button>
-            )}
-          </div>
-        </div>
-      </footer>
+
+      {/* Save FAB */}
+      <div className="fixed bottom-8 right-8 z-50">
+        <button
+          onClick={() => handleSave()}
+          disabled={saving || !isDirty}
+          className={`px-10 py-4 font-bold rounded-full shadow-2xl transition-all hover:scale-105 active:scale-95 disabled:opacity-80 disabled:cursor-not-allowed ${
+            isDirty ? 'bg-[#008080] text-white hover:bg-[#006666]' : 'bg-gray-400 text-white'
+          }`}
+        >
+          {saving && <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2 inline-block vertical-middle" />}
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
     </div>
   );
 }

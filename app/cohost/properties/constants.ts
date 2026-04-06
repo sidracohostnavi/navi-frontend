@@ -1,7 +1,8 @@
 export const AMENITIES_LIST = {
     'Essentials': ['Wifi', 'TV', 'Heating', 'Air conditioning', 'Hot water', 'Towels', 'Bed linens', 'Soap & shampoo', 'Toilet paper', 'Extra pillows & blankets', 'Hangers', 'Iron', 'Hair dryer'],
     'Kitchen & Dining': ['Kitchen', 'Refrigerator', 'Freezer', 'Microwave', 'Oven', 'Stove', 'Dishwasher', 'Coffee maker', 'Kettle', 'Toaster', 'Blender', 'Pots & pans', 'Dishes & cutlery', 'Dining table', 'Wine glasses'],
-    'Bedroom & Laundry': ['Washer', 'Dryer', 'Laundry detergent', 'Wardrobe / closet', 'Blackout blinds', 'Crib', 'High chair'],
+    'Bedroom': ['Bed Linens', 'Duvet/Blanket', 'Light blocking curtains/blinds', 'Walk-in closet', 'Hangers', 'TV', 'Ensuite Bathroom', 'Shared bathroom access', 'Fan', 'Dedicated workspace', 'Views'],
+    'Laundry': ['Washer', 'Dryer', 'Laundry detergent', 'Iron'],
     'Bathroom': ['Bathtub', 'Shower', 'Bidet', 'Bathtub + shower combo'],
     'Entertainment': ['Cable TV', 'Streaming services (Netflix etc.)', 'Game console', 'Board games', 'Books', 'Sound system'],
     'Internet & Office': ['Dedicated workspace', 'Ethernet connection', 'Monitor', 'Printer'],

@@ -97,6 +97,7 @@ async function handlePaymentSuccess(paymentIntent: Stripe.PaymentIntent) {
       created_by_user_id: hold.created_by_user_id,
       notes: hold.notes,
       is_active: true,
+      rental_agreement_accepted_at: new Date().toISOString(),
     })
     .select()
     .single();
