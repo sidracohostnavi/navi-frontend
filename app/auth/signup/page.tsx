@@ -17,14 +17,32 @@ function SignupContent() {
     const [message, setMessage] = useState<string | null>(null);
     const [checkingAuth, setCheckingAuth] = useState(true);
     const [isCoHostUI, setIsCoHostUI] = useState(false);
+    const [inviteValid, setInviteValid] = useState<boolean | null>(null);
+
+    const router = useRouter();
+    const searchParams = useSearchParams();
 
     useEffect(() => {
         const host = window.location.hostname;
         setIsCoHostUI(host.includes('cohostnavi.com') || host.includes('localhost'));
     }, []);
 
-    const router = useRouter();
-    const searchParams = useSearchParams();
+    // Validate invite token on mount
+    useEffect(() => {
+        const token = searchParams.get('invite');
+        if (!token) {
+            setInviteValid(false);
+            return;
+        }
+        fetch('/api/auth/validate-invite', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+        })
+            .then((res) => res.json())
+            .then(({ valid }) => setInviteValid(valid))
+            .catch(() => setInviteValid(false));
+    }, [searchParams]);
 
     // Default redirect depends on which domain we're on (client-side check)
     const isCoHost = typeof window !== 'undefined' &&
@@ -90,6 +108,15 @@ function SignupContent() {
             if (data.session) {
                 // Email confirmation is disabled, user is logged in
                 setMessage('Initializing your workspace...');
+                // Mark invite token as used
+                const inviteToken = searchParams.get('invite');
+                if (inviteToken) {
+                    await fetch('/api/auth/validate-invite', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: inviteToken, markUsed: true, usedByEmail: email }),
+                    });
+                }
                 await fetch('/api/cohost/workspaces/init', { method: 'POST' });
                 router.push('/cohost/properties/new');
             } else {
@@ -102,11 +129,46 @@ function SignupContent() {
         }
     };
 
-    // Show loading while checking auth
-    if (checkingAuth) {
+    // Show loading while invite or auth is being checked
+    if (inviteValid === null || checkingAuth) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-gray-50">
                 <div className="animate-pulse text-gray-500">Loading...</div>
+            </div>
+        );
+    }
+
+    // Invite-only gate — show branded closed screen
+    if (!inviteValid) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+                <div className="max-w-md w-full">
+                    <div className="bg-white rounded-2xl shadow-sm p-10 flex flex-col items-center text-center">
+                        <img
+                            src="/cohost-logo-full.png"
+                            alt="Navi CoHost"
+                            className="h-20 w-auto object-contain mb-8"
+                        />
+                        <h1 className="text-xl font-semibold text-gray-800 mb-3">
+                            Signups are currently by invitation only
+                        </h1>
+                        <p className="text-sm text-gray-500 leading-relaxed">
+                            Navi CoHost is in early access. Contact us to request an invitation and be among the first hosts to get access.
+                        </p>
+                        <a
+                            href="mailto:hello@cohostnavi.com"
+                            className="mt-8 inline-block px-6 py-2.5 bg-[#FA5A5A] text-white text-sm font-medium rounded-lg hover:bg-[#e04848] transition-colors"
+                        >
+                            Request Access
+                        </a>
+                        <a
+                            href="/auth/login"
+                            className="mt-4 text-sm text-gray-400 hover:text-gray-600"
+                        >
+                            Already have an account? Sign in
+                        </a>
+                    </div>
+                </div>
             </div>
         );
     }

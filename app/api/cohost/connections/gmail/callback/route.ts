@@ -17,8 +17,19 @@ export async function GET(request: NextRequest) {
     console.log('[GmailCallback] ====== V2 SECURE CALLBACK RUNNING ======');
 
     const code = searchParams.get('code');
-    const connectionId = searchParams.get('state'); // We passed connectionId as state
+    const stateParam = searchParams.get('state') || '';
     const error = searchParams.get('error');
+
+    // Decode state — may be plain connection_id (old format) or JSON {connection_id, return_to}
+    let connectionId: string;
+    let returnTo: string | null = null;
+    try {
+        const parsed = JSON.parse(stateParam);
+        connectionId = parsed.connection_id || stateParam;
+        returnTo = parsed.return_to || null;
+    } catch {
+        connectionId = stateParam;
+    }
 
     // Base redirect URL
     const baseUrl = '/cohost/settings/connections';
@@ -211,6 +222,32 @@ export async function GET(request: NextRequest) {
 
         console.log('[GmailCallback] ✅ Process completed successfully.');
 
+        // Propagate tokens to all other connections in this workspace that share the same Gmail account.
+        // This means reconnecting ONE connection reconnects all of them — no repeated sign-ins needed.
+        const propagateUpdate: any = {
+            gmail_access_token: tokens.access_token,
+            gmail_token_expires_at: tokens.expiry_date,
+            gmail_connected_at: new Date().toISOString(),
+            gmail_scopes: updates.gmail_scopes,
+            gmail_status: 'connected',
+            gmail_account_email: googleEmail,
+        };
+        if (tokens.refresh_token) {
+            propagateUpdate.gmail_refresh_token = tokens.refresh_token;
+        }
+        const { data: siblings, error: sibErr } = await adminSupabase
+            .from('connections')
+            .update(propagateUpdate)
+            .eq('workspace_id', workspaceId)
+            .eq('gmail_account_email', googleEmail)
+            .neq('id', connectionId)
+            .select('id, name');
+        if (sibErr) {
+            console.warn('[GmailCallback] Token propagation error (non-fatal):', sibErr.message);
+        } else {
+            console.log(`[GmailCallback] Propagated tokens to ${siblings?.length ?? 0} sibling connection(s):`, siblings?.map(s => s.name));
+        }
+
         // 3. Structured Audit Log
         console.log(JSON.stringify({
             event: 'oauth_callback_complete',
@@ -221,8 +258,11 @@ export async function GET(request: NextRequest) {
             outcome: 'success'
         }));
 
-        // Redirect with connection_id so frontend can auto-open edit modal for label selection
-        return NextResponse.redirect(new URL(`${baseUrl}?result=success&connection_id=${connectionId}`, request.url));
+        // Redirect back — to wizard if return_to=onboarding, otherwise settings
+        const successUrl = returnTo === 'onboarding'
+            ? `/cohost/onboarding?gmail=success&connection_id=${connectionId}`
+            : `${baseUrl}?result=success&connection_id=${connectionId}`;
+        return NextResponse.redirect(new URL(successUrl, request.url));
 
     } catch (err: any) {
         console.error('[GmailCallback] Exchange/Process Error:', err);

@@ -27,7 +27,7 @@ export default function CohostLayout({
   const { count: reviewCount } = useReviewCount();
 
   // Pages that should NOT show the full CoHost nav
-  const isStandalonePage = pathname.startsWith('/cohost/invite');
+  const isStandalonePage = pathname.startsWith('/cohost/invite') || pathname.startsWith('/cohost/onboarding');
 
   useEffect(() => {
     // Check initial session
@@ -43,6 +43,8 @@ export default function CohostLayout({
             const data = await res.json();
             setHasWorkspace(true);
             setUserPerms(getPermissionsForRole(data.role || 'cleaner'));
+
+            // Onboarding gate removed — wizard is opt-in via Add Property button
           } else {
             setHasWorkspace(false);
           }
@@ -301,6 +303,19 @@ export default function CohostLayout({
                         >
                           Support
                         </Link>
+                        {user?.email === 'sidra.navicohost@gmail.com' && (
+                          <>
+                            <div className="my-1 border-t border-gray-100" />
+                            <Link
+                              href="/cohost/developer"
+                              className="block px-4 py-2 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                              role="menuitem"
+                              onClick={() => setIsDropdownOpen(false)}
+                            >
+                              Developer Dashboard
+                            </Link>
+                          </>
+                        )}
                         <button
                           onClick={handleSignOut}
                           className="w-full text-left block px-4 py-2 text-sm text-red-600 hover:bg-red-50"

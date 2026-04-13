@@ -240,7 +240,14 @@ export async function PUT(
       'extra_guest_fee',
       'extra_guest_fee_frequency',
       'additional_fees',
-      'taxes'
+      'taxes',
+      'advance_notice_days',
+      'allow_last_minute_requests',
+      'same_day_advance_notice_time',
+      'preparation_time_days',
+      'availability_window_months',
+      'allow_request_beyond_window',
+      'is_unavailable_by_default',
     ];
     
     for (const field of allowedFields) {

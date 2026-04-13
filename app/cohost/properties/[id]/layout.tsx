@@ -21,7 +21,7 @@ export default function PropertyLayout({
       const supabase = createClient();
       const { data } = await supabase
         .from('cohost_properties')
-        .select('name, city, state, direct_booking_enabled')
+        .select('name, city, state, direct_booking_enabled, slug')
         .eq('id', id)
         .single();
       if (data) setProperty(data);
@@ -69,12 +69,21 @@ export default function PropertyLayout({
             >
               Calendar
             </Link>
-            <button
-              onClick={() => alert("This would open the public listing preview.")}
-              className="px-4 py-2 text-sm font-medium text-[#008080] bg-[#008080]/5 hover:bg-[#008080]/10 rounded-lg"
-            >
-              Preview Listing
-            </button>
+            {property?.slug ? (
+              <a
+                href={`/book/${property.slug}?preview=true`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 text-sm font-medium text-[#008080] bg-[#008080]/5 hover:bg-[#008080]/10 rounded-lg flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                Preview Listing
+              </a>
+            ) : (
+              <span className="px-4 py-2 text-sm font-medium text-gray-400 bg-gray-100 rounded-lg cursor-not-allowed" title="Set a URL slug in Direct Bookings to preview">
+                Preview Listing
+              </span>
+            )}
           </div>
         </div>
 
@@ -93,8 +102,8 @@ export default function PropertyLayout({
               {tab.id === 'direct-booking' && property ? (
                 <span className="flex items-center gap-1.5">
                   {tab.label}
-                  <span className={`text-[10px] font-bold ${property.direct_booking_enabled ? 'text-green-600' : 'text-red-600'}`}>
-                    {property.direct_booking_enabled ? '(Active)' : '(Inactive)'}
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${property.direct_booking_enabled ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                    {property.direct_booking_enabled ? 'Enabled' : 'Disabled'}
                   </span>
                 </span>
               ) : tab.label}

@@ -81,6 +81,24 @@ If the task is ambiguous, ask exactly one clarifying question before proceeding.
 
 ---
 
+## Rule 11 — Verify DB Columns Before Using Them
+
+Never reference a database column that is not already confirmed to exist. Before adding any new column reference in a query, select, update, or insert — stop and say: *"This requires the column `[column]` on `[table]`. Does it exist?"* Then wait for confirmation. Do not assume a column exists because it makes logical sense. The `is_active` incident (which wiped all properties from the UI) happened because I assumed a column existed without verifying.
+
+---
+
+## Rule 12 — Edit, Never Rewrite
+
+When a task requires adding functionality to an existing file, use targeted edits only. Never use Write() to replace an entire working file. If a file needs a new button, add only the button. If a file needs a new state variable, add only that variable. Rewriting a file risks destroying working logic that was not part of the task. The properties page incident (disappearing listings) was caused by a full file rewrite that introduced an unverified column.
+
+---
+
+## Rule 13 — Out-of-Scope Changes Require Permission
+
+If completing a task would benefit from also changing something outside the stated scope, do not make that change. Instead, flag it at the end: *"To fully solve this I would also need to touch [file/feature]. This is outside the current task — should I proceed?"* Then wait. Do not touch it until explicitly approved. This applies even if the out-of-scope change seems small or obviously correct.
+
+---
+
 ## What a Good Response Looks Like
 
 ```

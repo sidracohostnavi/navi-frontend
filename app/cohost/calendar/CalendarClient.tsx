@@ -188,6 +188,23 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
   const [permissions, setPermissions] = useState<FeaturePermissions | null>(null);
   const [userRole, setUserRole] = useState<string>('');
 
+  // Listing-incomplete banner — shown when workspace has draft/incomplete properties
+  const [showListingBanner, setShowListingBanner] = useState(false);
+  useEffect(() => {
+    const supabaseClient = createClient();
+    const check = async () => {
+      const { data: { user } } = await supabaseClient.auth.getUser();
+      if (!user) return;
+      const { data: ws } = await supabaseClient
+        .from('cohost_workspaces')
+        .select('onboarding_completed')
+        .eq('owner_id', user.id)
+        .maybeSingle();
+      if (ws && ws.onboarding_completed === false) setShowListingBanner(true);
+    };
+    check();
+  }, []);
+
   // Dynamically resolve layout constants based on client state
   const CELL_WIDTH = isMobile ? CELL_WIDTH_MOBILE : CELL_WIDTH_DESKTOP;
   const ROW_HEIGHT = isMobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT_DESKTOP;
@@ -818,6 +835,26 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
 
   return (
     <div className={`flex flex-col h-[calc(100vh-64px)] bg-white ${isResizing ? 'cursor-col-resize select-none' : ''}`}>
+      {/* Listing-incomplete reminder banner */}
+      {showListingBanner && (
+        <div className="flex items-center justify-between gap-4 px-6 py-2.5 bg-amber-50 border-b border-amber-200 flex-shrink-0">
+          <div className="flex items-center gap-2 text-sm text-amber-800">
+            <svg className="w-4 h-4 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <span>Your property listing is incomplete. <a href="/cohost/properties" className="font-semibold underline hover:text-amber-900">Go to Properties</a> to add a description, set pricing, and enable direct bookings.</span>
+          </div>
+          <button
+            onClick={() => setShowListingBanner(false)}
+            className="shrink-0 text-amber-400 hover:text-amber-700 transition-colors"
+            aria-label="Dismiss"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
       {/* Top Controls */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
         <h1 className="text-xl font-bold text-gray-900">Booking Timeline</h1>

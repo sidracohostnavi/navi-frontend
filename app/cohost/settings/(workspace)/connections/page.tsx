@@ -22,6 +22,7 @@ type Connection = {
     mapped_properties_count?: number;
     mapped_property_ids?: string[];
     gmail_connected_at?: string | null;
+    gmail_account_email?: string | null;
     gmail_status?: 'connected' | 'error' | 'pending' | 'needs_reconnect' | 'disconnected' | null;
     gmail_last_error_code?: string | null;
     gmail_last_error_message?: string | null;
@@ -249,12 +250,59 @@ function ConnectionsSettingsPageInner() {
         fetchData();
     }, []);
 
+    const RECONNECT_QUEUE_KEY = 'navi_reconnect_queue';
+
+    // Reconnect All — one OAuth per unique Gmail account; callback auto-propagates
+    // tokens to all sibling connections that share the same Gmail address.
+    const handleReconnectAll = () => {
+        const toReconnect = connections.filter(cx => cx.gmail_status !== 'connected');
+        if (toReconnect.length === 0) {
+            setToast({ type: 'info', message: 'All connections are already active.' });
+            return;
+        }
+        // Deduplicate: only one connection per unique gmail_account_email.
+        // The callback will propagate the new tokens to all others with that email.
+        const seenEmails = new Set<string>();
+        const uniqueToReconnect = toReconnect.filter(cx => {
+            const key = cx.gmail_account_email || cx.id; // fall back to id if no email stored
+            if (seenEmails.has(key)) return false;
+            seenEmails.add(key);
+            return true;
+        });
+        const [first, ...rest] = uniqueToReconnect;
+        if (rest.length > 0) {
+            localStorage.setItem(RECONNECT_QUEUE_KEY, JSON.stringify(rest.map(c => c.id)));
+        } else {
+            localStorage.removeItem(RECONNECT_QUEUE_KEY);
+        }
+        window.location.href = `/api/cohost/connections/${first.id}/gmail/start`;
+    };
+
     // Handle OAuth redirect - auto-open edit modal for label selection
+    // Also drains the reconnect queue if one exists
     useEffect(() => {
         const result = searchParams.get('result');
         const connectionId = searchParams.get('connection_id');
 
         if (result === 'success' && connectionId) {
+            // Check if there's a reconnect queue to continue
+            const queueRaw = localStorage.getItem(RECONNECT_QUEUE_KEY);
+            if (queueRaw) {
+                const queue: string[] = JSON.parse(queueRaw);
+                if (queue.length > 0) {
+                    const [next, ...remaining] = queue;
+                    localStorage.setItem(RECONNECT_QUEUE_KEY, JSON.stringify(remaining));
+                    // Brief pause so user sees the redirect is happening
+                    setToast({ type: 'success', message: `✓ Connected. Moving to next (${queue.length} remaining)…` });
+                    setTimeout(() => {
+                        window.location.href = `/api/cohost/connections/${next}/gmail/start`;
+                    }, 1200);
+                    return;
+                } else {
+                    localStorage.removeItem(RECONNECT_QUEUE_KEY);
+                    setToast({ type: 'success', message: '✅ All connections reconnected!' });
+                }
+            }
             setPendingConnectionId(connectionId);
             // Clean up URL params
             router.replace('/cohost/settings/connections', { scroll: false });
@@ -590,15 +638,29 @@ function ConnectionsSettingsPageInner() {
                         <h1 className="text-2xl font-bold text-gray-900">Platform Connections</h1>
                         <p className="text-gray-500 mt-1">Manage credentials and link them to your properties.</p>
                     </div>
-                    <button
-                        onClick={() => handleOpenModal()}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm flex items-center gap-2"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                        Add Connection
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {connections.some(cx => cx.gmail_status !== 'connected') && (
+                            <button
+                                onClick={handleReconnectAll}
+                                className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 shadow-sm flex items-center gap-2"
+                                title="Re-authorize Gmail for all disconnected connections in sequence"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Reconnect All
+                            </button>
+                        )}
+                        <button
+                            onClick={() => handleOpenModal()}
+                            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm flex items-center gap-2"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            Add Connection
+                        </button>
+                    </div>
                 </header>
 
                 {/* Email Warning */}

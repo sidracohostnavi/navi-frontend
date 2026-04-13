@@ -48,7 +48,14 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
   const [globalTaxes, setGlobalTaxes] = useState<any[]>([]);
   
   const [propertyName, setPropertyName] = useState('');
-  
+  const [previewData, setPreviewData] = useState<{
+    coverPhoto: string; city: string; state: string;
+    bedrooms: number; beds: number; bathrooms: number;
+    headline: string; slug: string;
+  } | null>(null);
+  const [stripeDashboardUrl, setStripeDashboardUrl] = useState<string | null>(null);
+  const [connectingStripe, setConnectingStripe] = useState(false);
+
   useEffect(() => {
     fetchListing();
     fetchPolicies();
@@ -101,11 +108,32 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
       
       setStripeConnected(data.stripeConnected);
       setPropertyName(data.property.name);
-      setWorkspaceInfo({
-        name: data.workspaceName,
-        count: data.workspacePropertyCount
+      setWorkspaceInfo({ name: data.workspaceName, count: data.workspacePropertyCount });
+
+      // Build preview data
+      const rawPhotos: any[] = data.property.listing_photos || [];
+      const coverPhoto = rawPhotos.length > 0
+        ? (typeof rawPhotos[0] === 'string' ? rawPhotos[0] : rawPhotos[0]?.url || '')
+        : '';
+      setPreviewData({
+        coverPhoto,
+        city: data.property.city || '',
+        state: data.property.state || '',
+        bedrooms: data.property.bedrooms || 0,
+        beds: data.property.beds || 0,
+        bathrooms: data.property.bathrooms || 0,
+        headline: data.property.headline || '',
+        slug: data.property.slug || '',
       });
-      
+
+      // Fetch Stripe dashboard URL if connected
+      if (data.stripeConnected) {
+        fetch('/api/cohost/stripe/status')
+          .then(r => r.json())
+          .then(d => { if (d.dashboardUrl) setStripeDashboardUrl(d.dashboardUrl); })
+          .catch(() => {});
+      }
+
       // Set form values
       const initialForm = {
         direct_booking_enabled: data.property.direct_booking_enabled || false,
@@ -263,7 +291,21 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
       setSaving(false);
     }
   };
-  
+
+  const connectStripe = async () => {
+    setConnectingStripe(true);
+    try {
+      const res = await fetch('/api/cohost/stripe/connect', { method: 'POST' });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+      else setError(data.error || 'Failed to start Stripe connection');
+    } catch {
+      setError('Failed to connect Stripe');
+    } finally {
+      setConnectingStripe(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 p-8 flex items-center justify-center">
@@ -277,22 +319,64 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-4xl mx-auto px-4 py-8 pb-32">
-        {/* Stripe Warning */}
-        {!stripeConnected && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 flex items-start gap-3">
-            <svg className="w-5 h-5 text-yellow-600 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <div>
-              <p className="font-medium text-yellow-800">Stripe not connected</p>
-              <p className="text-sm text-yellow-700 mt-1">
-                You need to connect Stripe before enabling direct booking.{' '}
-                <Link href="/cohost/settings/billing" className="underline">Go to Settings</Link>
-              </p>
+
+        {/* Status badge */}
+        <div className="flex items-center gap-3 mb-6">
+          <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold ${
+            form.direct_booking_enabled
+              ? 'bg-green-100 text-green-700 border border-green-200'
+              : 'bg-red-100 text-red-600 border border-red-200'
+          }`}>
+            <span className={`w-2 h-2 rounded-full ${form.direct_booking_enabled ? 'bg-green-500' : 'bg-red-500'}`} />
+            Direct Booking: {form.direct_booking_enabled ? 'Enabled' : 'Disabled'}
+          </span>
+          {form.direct_booking_enabled && (
+            <button onClick={handleDisable} className="text-xs text-gray-400 hover:text-red-500 underline transition-colors">Disable</button>
+          )}
+        </div>
+
+        {/* Stripe section */}
+        <section className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Processing</h2>
+          {stripeConnected ? (
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-green-100 rounded-full flex items-center justify-center">
+                  <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                </div>
+                <div>
+                  <p className="font-semibold text-gray-900 text-sm">Stripe Connected</p>
+                  <p className="text-xs text-gray-500">Guest payments go directly to your Stripe account.</p>
+                </div>
+              </div>
+              {stripeDashboardUrl && (
+                <a href={stripeDashboardUrl} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                  Stripe Dashboard
+                </a>
+              )}
             </div>
-          </div>
-        )}
-        
+          ) : (
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-gray-900 text-sm mb-1">Connect Stripe to accept payments</p>
+                <p className="text-xs text-gray-500">Navi CoHost uses Stripe Connect so guest payments go directly to your bank. Onboarding takes ~5 minutes.</p>
+              </div>
+              <button onClick={connectStripe} disabled={connectingStripe}
+                className="flex items-center gap-2 px-5 py-2.5 bg-[#635BFF] text-white text-sm font-semibold rounded-xl hover:bg-[#5249d4] transition-colors disabled:opacity-60 whitespace-nowrap">
+                {connectingStripe
+                  ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />Connecting...</>
+                  : <>
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.591-7.305z"/></svg>
+                      Connect with Stripe
+                    </>
+                }
+              </button>
+            </div>
+          )}
+        </section>
+
         {/* Email Warning */}
         {!emailConfirmed && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 flex items-start gap-3">
@@ -401,7 +485,112 @@ export default function DirectBookingEditor({ params }: { params: Promise<{ id: 
             </div>
           </section>
 
-          
+          {/* ── Listing Preview card ─────────────────────────────────────── */}
+          <section className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Listing Preview</h2>
+                <p className="text-sm text-gray-500">This is how guests see your listing card.</p>
+              </div>
+              {form.slug && (
+                <a
+                  href={bookingUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-sm text-[#008080] hover:underline font-medium"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                  View live page
+                </a>
+              )}
+            </div>
+
+            {/* Preview card — mimics the public listing card style */}
+            <div className="max-w-sm rounded-2xl overflow-hidden border border-gray-200 shadow-sm">
+              {/* Cover photo */}
+              <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden">
+                {previewData?.coverPhoto ? (
+                  <img src={previewData.coverPhoto} alt={propertyName} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-gray-300">
+                    <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                    <span className="text-xs">Add photos in the Photos tab</span>
+                  </div>
+                )}
+                <div className={`absolute top-3 left-3 px-2.5 py-1 rounded-full text-xs font-bold ${form.direct_booking_enabled ? 'bg-green-500 text-white' : 'bg-gray-800/70 text-white backdrop-blur-sm'}`}>
+                  {form.direct_booking_enabled ? 'Live' : 'Draft'}
+                </div>
+              </div>
+
+              {/* Card body */}
+              <div className="p-4 space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-900 truncate">{propertyName || 'Your Property'}</p>
+                    {(previewData?.city || previewData?.state) && (
+                      <p className="text-sm text-gray-500">{[previewData.city, previewData.state].filter(Boolean).join(', ')}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Headline */}
+                {form.headline && (
+                  <p className="text-sm text-gray-600 line-clamp-2">{form.headline}</p>
+                )}
+
+                {/* Stats row */}
+                {previewData && (previewData.bedrooms > 0 || previewData.beds > 0 || previewData.bathrooms > 0) && (
+                  <p className="text-xs text-gray-400">
+                    {[
+                      previewData.bedrooms ? `${previewData.bedrooms} bed${previewData.bedrooms !== 1 ? 'rooms' : 'room'}` : null,
+                      previewData.beds ? `${previewData.beds} bed${previewData.beds !== 1 ? 's' : ''}` : null,
+                      previewData.bathrooms ? `${previewData.bathrooms} bath${previewData.bathrooms !== 1 ? 's' : ''}` : null,
+                    ].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+
+                {/* Price */}
+                <div className="pt-1 border-t border-gray-100 flex items-baseline gap-1">
+                  {form.nightly_rate ? (
+                    <>
+                      <span className="font-bold text-gray-900">${parseFloat(form.nightly_rate).toFixed(0)}</span>
+                      <span className="text-sm text-gray-500">/ night</span>
+                    </>
+                  ) : (
+                    <span className="text-sm text-gray-400 italic">Set nightly rate in Pricing tab</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Checklist of required fields */}
+            <div className="mt-5 border-t pt-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Requirements to go live</p>
+              <div className="space-y-2">
+                {[
+                  { label: 'Booking URL slug', done: !!form.slug && slugStatus !== 'taken' },
+                  { label: 'Headline', done: !!form.headline },
+                  { label: 'Description', done: !!form.description },
+                  { label: 'Nightly rate', done: !!form.nightly_rate },
+                  { label: 'Stripe connected', done: stripeConnected },
+                  { label: 'Email verified', done: emailConfirmed },
+                  { label: 'Rental agreement or booking policy', done: !!form.rental_agreement_text || !!form.policy_id },
+                  { label: 'Cover photo', done: !!(previewData?.coverPhoto) },
+                ].map(({ label, done }) => (
+                  <div key={label} className="flex items-center gap-2.5">
+                    <div className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 ${done ? 'bg-green-100' : 'bg-gray-100'}`}>
+                      {done
+                        ? <svg className="w-2.5 h-2.5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                        : <svg className="w-2.5 h-2.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                      }
+                    </div>
+                    <span className={`text-sm ${done ? 'text-gray-600' : 'text-gray-400'}`}>{label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
         </div>
       </div>
 

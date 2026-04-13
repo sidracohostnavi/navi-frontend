@@ -115,7 +115,14 @@ export async function GET(
         // 4. Generate Auth URL
         const oauth2Client = getGoogleOAuthClient();
 
-        // We pass the connection ID as 'state' so we know which connection to update on callback
+        // We pass the connection ID as 'state' so we know which connection to update on callback.
+        // If return_to=onboarding is passed, encode it alongside the connection_id so the callback
+        // can redirect back to the wizard instead of settings.
+        const returnTo = request.nextUrl.searchParams.get('return_to');
+        const oauthState = returnTo
+            ? JSON.stringify({ connection_id: id, return_to: returnTo })
+            : id;
+
         const scopes = [
             'https://www.googleapis.com/auth/gmail.readonly',
             'https://www.googleapis.com/auth/userinfo.email'
@@ -124,7 +131,7 @@ export async function GET(
         const url = oauth2Client.generateAuthUrl({
             access_type: 'offline', // Essential for refresh token
             scope: scopes,
-            state: id,
+            state: oauthState,
             prompt: 'consent' // Force full consent to ensure refresh token is returned
         });
 

@@ -17,12 +17,23 @@ async function checkRecentBookings() {
       .eq('propertyId', id)
       .order('created_at', { ascending: false })
       .limit(1);
-    
+
     if (error) {
       console.error(`Error for ${id}:`, error);
       continue;
     }
     console.log(`Recent booking for ${id}:`, data?.[0] || 'None');
+  }
+}
+
+checkRecentBookings();
+      .limit(1);
+
+if (error) {
+  console.error(`Error for ${id}:`, error);
+  continue;
+}
+console.log(`Recent booking for ${id}:`, data?.[0] || 'None');
   }
 }
 

@@ -1,8 +1,54 @@
+'use client';
+
+import { useState } from 'react';
 import Link from 'next/link';
 
+function InviteOnlyModal({ onClose }: { onClose: () => void }) {
+    return (
+        <div
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 px-4"
+            onClick={onClose}
+        >
+            <div
+                className="bg-white rounded-2xl shadow-xl p-8 max-w-sm w-full text-center"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <img
+                    src="/cohost-logo-full.png"
+                    alt="Navi CoHost"
+                    className="h-16 w-auto object-contain mx-auto mb-6"
+                />
+                <h2 className="text-lg font-semibold text-gray-800 mb-2">
+                    Currently invite-only
+                </h2>
+                <p className="text-sm text-gray-500 leading-relaxed mb-6">
+                    Navi CoHost is in early access. We&apos;re onboarding hosts personally. If you&apos;re interested, reach out and we&apos;ll be in touch.
+                </p>
+                <Link
+                    href="/contact"
+                    className="block w-full bg-[#FA5A5A] hover:bg-[#e04848] text-white px-6 py-2.5 rounded-lg font-medium text-sm transition mb-3"
+                    onClick={onClose}
+                >
+                    Request Access
+                </Link>
+                <button
+                    onClick={onClose}
+                    className="text-sm text-gray-400 hover:text-gray-600 transition"
+                >
+                    Maybe later
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export default function CoHostLandingPage() {
+    const [showModal, setShowModal] = useState(false);
+
     return (
         <div className="min-h-screen bg-gradient-to-b from-[#FA5A5A]/10 to-white">
+            {showModal && <InviteOnlyModal onClose={() => setShowModal(false)} />}
+
             {/* Navigation */}
             <nav className="fixed top-0 w-full bg-white/80 backdrop-blur-sm border-b border-[#FA5A5A]/20 z-50">
                 <div className="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
@@ -13,12 +59,12 @@ export default function CoHostLandingPage() {
                         <Link href="/auth/login" className="text-gray-600 hover:text-gray-900 transition">
                             Sign In
                         </Link>
-                        <Link
-                            href="/auth/signup"
+                        <button
+                            onClick={() => setShowModal(true)}
                             className="bg-[#FA5A5A] hover:bg-[#e04848] text-white px-5 py-2 rounded-full font-medium transition"
                         >
                             Start Free
-                        </Link>
+                        </button>
                     </div>
                 </div>
             </nav>
@@ -34,12 +80,12 @@ export default function CoHostLandingPage() {
                         Keep your bookings, guest messages, and cleaning perfectly organized.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center mb-6">
-                        <Link
-                            href="/auth/signup"
+                        <button
+                            onClick={() => setShowModal(true)}
                             className="bg-[#FA5A5A] hover:bg-[#e04848] text-white px-8 py-4 rounded-full font-semibold text-lg transition shadow-lg shadow-[#FA5A5A]/30"
                         >
                             Start Hosting Smarter
-                        </Link>
+                        </button>
                     </div>
                     <p className="text-gray-500 text-sm">
                         Works with Airbnb, VRBO, Booking.com and any platform using iCal.
@@ -51,7 +97,7 @@ export default function CoHostLandingPage() {
             <section className="py-20 px-6 bg-white">
                 <div className="max-w-4xl mx-auto">
                     <h2 className="text-3xl md:text-4xl font-bold text-gray-900 text-center mb-8">
-                        Hosting Shouldn't Feel Chaotic
+                        Hosting Shouldn&apos;t Feel Chaotic
                     </h2>
                     <p className="text-gray-600 text-center text-lg mb-8">
                         Hosts juggle too many things every day:
@@ -237,12 +283,12 @@ export default function CoHostLandingPage() {
                     <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-6">
                         Start Hosting Smarter Today
                     </h2>
-                    <Link
-                        href="/auth/signup"
+                    <button
+                        onClick={() => setShowModal(true)}
                         className="inline-block bg-[#FA5A5A] hover:bg-[#e04848] text-white px-10 py-4 rounded-full font-semibold text-lg transition shadow-lg shadow-[#FA5A5A]/30"
                     >
                         Create Your Free Account
-                    </Link>
+                    </button>
                     <p className="text-gray-500 mt-4">Get organized in minutes.</p>
                 </div>
             </section>
@@ -253,9 +299,14 @@ export default function CoHostLandingPage() {
                     <div className="flex items-center gap-2">
                         <img src="/cohost-logo-full.png" alt="Navi CoHost" className="h-10 sm:h-12 w-auto max-w-[40vw] sm:max-w-none object-contain grayscale opacity-60" />
                     </div>
-                    <p className="text-gray-400 text-sm">
-                        © 2026 Navi CoHost. Made with ❤️ for hosts.
-                    </p>
+                    <div className="flex items-center gap-6">
+                        <Link href="/contact" className="text-gray-400 hover:text-gray-600 text-sm transition">
+                            Contact
+                        </Link>
+                        <p className="text-gray-400 text-sm">
+                            © 2026 Navi CoHost. Made with ❤️ for hosts.
+                        </p>
+                    </div>
                 </div>
             </footer>
         </div>
