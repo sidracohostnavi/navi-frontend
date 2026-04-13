@@ -152,14 +152,20 @@ function SignupContent() {
                         <h1 className="text-xl font-semibold text-gray-800 mb-3">
                             Signups are currently by invitation only
                         </h1>
-                        <p className="text-sm text-gray-500 leading-relaxed">
-                            Navi CoHost is in early access. Contact us to request an invitation and be among the first hosts to get access.
+                        <p className="text-sm text-gray-500 leading-relaxed mb-4">
+                            Navi CoHost is in early access. To request an invite, email us at:
                         </p>
                         <a
-                            href="mailto:hello@cohostnavi.com"
-                            className="mt-8 inline-block px-6 py-2.5 bg-[#FA5A5A] text-white text-sm font-medium rounded-lg hover:bg-[#e04848] transition-colors"
+                            href="mailto:sidra@cohostnavi.com"
+                            className="text-[#FA5A5A] font-semibold text-base hover:underline"
                         >
-                            Request Access
+                            sidra@cohostnavi.com
+                        </a>
+                        <a
+                            href="mailto:sidra@cohostnavi.com"
+                            className="mt-6 inline-block px-6 py-2.5 bg-[#FA5A5A] text-white text-sm font-medium rounded-lg hover:bg-[#e04848] transition-colors"
+                        >
+                            Send Email
                         </a>
                         <a
                             href="/auth/login"

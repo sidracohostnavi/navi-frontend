@@ -21,22 +21,30 @@ function InviteOnlyModal({ onClose }: { onClose: () => void }) {
                 <h2 className="text-lg font-semibold text-gray-800 mb-2">
                     Currently invite-only
                 </h2>
-                <p className="text-sm text-gray-500 leading-relaxed mb-6">
-                    Navi CoHost is in early access. We&apos;re onboarding hosts personally. If you&apos;re interested, reach out and we&apos;ll be in touch.
+                <p className="text-sm text-gray-500 leading-relaxed mb-4">
+                    Navi CoHost is in early access. We&apos;re onboarding hosts personally.
                 </p>
-                <Link
-                    href="/contact"
-                    className="block w-full bg-[#FA5A5A] hover:bg-[#e04848] text-white px-6 py-2.5 rounded-lg font-medium text-sm transition mb-3"
-                    onClick={onClose}
+                <p className="text-sm text-gray-600 mb-1">To request access, email us at:</p>
+                <a
+                    href="mailto:sidra@cohostnavi.com"
+                    className="text-[#FA5A5A] font-semibold text-base hover:underline"
                 >
-                    Request Access
-                </Link>
-                <button
-                    onClick={onClose}
-                    className="text-sm text-gray-400 hover:text-gray-600 transition"
-                >
-                    Maybe later
-                </button>
+                    sidra@cohostnavi.com
+                </a>
+                <div className="mt-6">
+                    <a
+                        href="mailto:sidra@cohostnavi.com"
+                        className="block w-full bg-[#FA5A5A] hover:bg-[#e04848] text-white px-6 py-2.5 rounded-lg font-medium text-sm transition mb-3"
+                    >
+                        Send Email
+                    </a>
+                    <button
+                        onClick={onClose}
+                        className="text-sm text-gray-400 hover:text-gray-600 transition"
+                    >
+                        Maybe later
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -300,9 +308,9 @@ export default function CoHostLandingPage() {
                         <img src="/cohost-logo-full.png" alt="Navi CoHost" className="h-10 sm:h-12 w-auto max-w-[40vw] sm:max-w-none object-contain grayscale opacity-60" />
                     </div>
                     <div className="flex items-center gap-6">
-                        <Link href="/contact" className="text-gray-400 hover:text-gray-600 text-sm transition">
+                        <a href="mailto:sidra@cohostnavi.com" className="text-gray-400 hover:text-gray-600 text-sm transition">
                             Contact
-                        </Link>
+                        </a>
                         <p className="text-gray-400 text-sm">
                             © 2026 Navi CoHost. Made with ❤️ for hosts.
                         </p>
