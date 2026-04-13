@@ -50,7 +50,8 @@ export async function GET() {
         propCountByWorkspace.set(p.workspace_id, (propCountByWorkspace.get(p.workspace_id) || 0) + 1);
     }
 
-    const connectionsByWorkspace = new Map<string, typeof connections[0][]>();
+    type Connection = NonNullable<typeof connections>[number];
+    const connectionsByWorkspace = new Map<string, Connection[]>();
     for (const c of connections || []) {
         const list = connectionsByWorkspace.get(c.workspace_id) || [];
         list.push(c);

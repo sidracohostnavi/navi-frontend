@@ -104,7 +104,7 @@ export async function GET(
         .maybeSingle();
 
       if (retry.data) {
-        property = { ...retry.data, policy: null };
+        property = { ...retry.data, policy: [] };
         error = null;
       }
     }
