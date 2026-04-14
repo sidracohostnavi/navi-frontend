@@ -364,9 +364,9 @@ export default function PropertyPricingPage({ params }: { params: Promise<{ id: 
           <div>
             <Label>Prep Time</Label>
             <select value={form.preparation_time_days} onChange={e => setForm(f => ({ ...f, preparation_time_days: parseInt(e.target.value) }))} className={selectCls}>
-              <option value="0">None</option>
-              <option value="1">1 night</option>
-              <option value="2">2 nights</option>
+              <option value="0">No Prep Time</option>
+              <option value="1">1 Day Before &amp; After</option>
+              <option value="2">2 Days Before &amp; After</option>
             </select>
           </div>
           <div className="md:col-span-2">

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { ASSIGNABLE_ROLES, ROLE_LABELS, type Role } from '@/lib/roles/roleConfig';
 import { useSessionRefresh } from '@/lib/hooks/useSessionRefresh';
 import ManagePropertiesModal from './ManagePropertiesModal';
+import PayRatesSection from './PayRatesSection';
 import { Key } from 'lucide-react';
 
 export default function TeamSettingsPage() {
@@ -385,6 +386,8 @@ export default function TeamSettingsPage() {
           onClose={() => setManagingUser(null)}
         />
       )}
+
+      <PayRatesSection />
     </div>
   );
 }

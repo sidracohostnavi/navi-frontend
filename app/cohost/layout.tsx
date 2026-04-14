@@ -282,7 +282,7 @@ export default function CohostLayout({
                             role="menuitem"
                             onClick={() => setIsDropdownOpen(false)}
                           >
-                            Plans & Billing
+                            Payments & Payouts
                           </Link>
                         )}
                         {(!userPerms || userPerms.canManageTeam) && (

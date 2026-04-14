@@ -7,7 +7,8 @@ import {
     User,
     HelpCircle,
     FileText,
-    DollarSign
+    DollarSign,
+    Package
 } from 'lucide-react';
 import { LucideIcon } from 'lucide-react';
 
@@ -62,11 +63,18 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
         description: 'Choose what events trigger email or push notifications.',
         color: 'text-amber-600'
     },
-    { 
-        name: 'Billing', 
-        href: '/cohost/settings/billing', 
+    {
+        name: 'Plans & Packages',
+        href: '/cohost/settings/packages',
+        icon: Package,
+        description: 'View available subscription tiers and property limits.',
+        color: 'text-teal-600'
+    },
+    {
+        name: 'Payments & Payouts',
+        href: '/cohost/settings/billing',
         icon: CreditCard,
-        description: 'Manage your subscription, payment methods, and invoices.',
+        description: 'Manage Stripe payouts for direct bookings and subscription payments.',
         color: 'text-indigo-600'
     },
     { 

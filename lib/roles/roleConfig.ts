@@ -29,6 +29,7 @@ export interface FeaturePermissions {
     canViewSettingsTab: boolean;
     canViewReviewInbox: boolean;
     canManagePricing: boolean;
+    canViewTasks: boolean;
 }
 
 export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
@@ -47,6 +48,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewSettingsTab: true,
         canViewReviewInbox: true,
         canManagePricing: true,
+        canViewTasks: true,
     },
     admin: {
         canViewCalendar: true,
@@ -63,6 +65,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewSettingsTab: true,
         canViewReviewInbox: true,
         canManagePricing: true,
+        canViewTasks: true,
     },
     manager: {
         canViewCalendar: true,
@@ -79,6 +82,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewSettingsTab: true,
         canViewReviewInbox: true,
         canManagePricing: true,
+        canViewTasks: true,
     },
     cleaner: {
         canViewCalendar: true,
@@ -95,6 +99,7 @@ export const ROLE_PERMISSIONS: Record<Role, FeaturePermissions> = {
         canViewSettingsTab: false,
         canViewReviewInbox: false,
         canManagePricing: false,
+        canViewTasks: true,
     },
 };
 
@@ -106,6 +111,7 @@ export const SIDEBAR_PERMISSION_MAP: Record<string, keyof FeaturePermissions> = 
     '/cohost/settings/team': 'canManageTeam',
     '/cohost/settings/notifications': 'canViewNotifications',
     '/cohost/settings/billing': 'canViewBilling',
+    '/cohost/settings/packages': 'canViewBilling',
     '/cohost/settings/profile': 'canViewProfile',
     '/cohost/settings/support': 'canViewSupport',
     '/cohost/settings/pricing': 'canManagePricing',

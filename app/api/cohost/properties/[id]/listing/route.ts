@@ -25,10 +25,13 @@ export async function GET(
     let { data: property, error } = await supabase
       .from('cohost_properties')
       .select(`
-        id, name, direct_booking_enabled, slug, headline, description, 
-        listing_photos, rental_agreement_text, nightly_rate, cleaning_fee, 
+        id, name, direct_booking_enabled, slug, headline, description,
+        listing_photos, rental_agreement_text, nightly_rate, cleaning_fee,
         min_nights, max_nights, base_nightly_rate, currency, policy_id,
         base_guests_included, extra_guest_fee, extra_guest_fee_frequency, additional_fees, taxes, workspace_id,
+        advance_notice_days, allow_last_minute_requests, same_day_advance_notice_time,
+        preparation_time_days, availability_window_months, allow_request_beyond_window, is_unavailable_by_default,
+        max_guests,
         policy:booking_policies(*)
       `)
       .eq('id', propertyId)
@@ -283,7 +286,18 @@ export async function PUT(
     if (updateError) {
       return NextResponse.json({ error: updateError.message || 'Failed to save' }, { status: 500 });
     }
-    
+
+    // SYNC: preparation_time_days → cleaning_pre_days + cleaning_post_days
+    // Both are kept equal so the calendar blocking matches what the host set in Pricing.
+    if (update.preparation_time_days !== undefined) {
+      const days = update.preparation_time_days as number;
+      await supabase
+        .from('cohost_properties')
+        .update({ cleaning_pre_days: days, cleaning_post_days: days })
+        .eq('id', propertyId);
+      // Sync failure is non-fatal — the primary save already succeeded.
+    }
+
     return NextResponse.json({ success: true });
     
   } catch (error: any) {
