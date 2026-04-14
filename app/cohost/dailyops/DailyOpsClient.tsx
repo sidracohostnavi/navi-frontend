@@ -15,6 +15,7 @@ interface Cleaning {
   check_out: string;
   next_checkin: string | null;
   cleaning_window_hours: number | null;
+  cleaning_window_end: string | null;
   times_missing: boolean;
   is_completed: boolean;
   completed_at: string | null;
@@ -261,8 +262,8 @@ function CleaningCard({
           <div className="text-sm text-gray-500 space-y-1">
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
               <span>Checkout: <span className="text-gray-700 font-medium">{fmtDate(cleaning.check_out)} at {fmtTime(cleaning.check_out)}</span></span>
-              {cleaning.next_checkin && (
-                <span>Next check-in: <span className="text-gray-700 font-medium">{fmtDate(cleaning.next_checkin)} at {fmtTime(cleaning.next_checkin)}</span></span>
+              {cleaning.cleaning_window_end && (
+                <span>Clean by: <span className="text-gray-700 font-medium">{fmtDate(cleaning.cleaning_window_end)} at {fmtTime(cleaning.cleaning_window_end)}</span></span>
               )}
             </div>
             {!cleaning.is_completed && (

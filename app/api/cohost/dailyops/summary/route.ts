@@ -123,6 +123,23 @@ export async function GET() {
     return d.toISOString();
   }
 
+  // Policy-based cleaning deadline: checkout_date + buffer_days at check_in_time.
+  // This is the "clean by" time that cleaners should target, derived from the
+  // host's preparation_time_days policy — independent of actual next booking.
+  function computeWindowEnd(
+    checkoutDateIso: string,
+    checkinTime: string | null,
+    bufferDays: number
+  ): string | null {
+    if (!checkinTime) return null;
+    const datePart = checkoutDateIso.split('T')[0];
+    const [h, m] = checkinTime.split(':').map(Number);
+    const d = new Date(`${datePart}T00:00:00`);
+    d.setDate(d.getDate() + bufferDays);
+    d.setHours(h, m, 0, 0);
+    return d.toISOString();
+  }
+
   // Cleaning window = hours from (checkout date at check_out_time)
   // to (checkout date + buffer days at check_in_time).
   // Buffer = cleaning_post_days only — pre and post blocks overlap on the
@@ -173,6 +190,8 @@ export async function GET() {
 
     // Cleaning window: purely from property policy (buffer days + times)
     const cleaningWindowHours = computeWindowHours(b.check_out, checkoutTime, checkinTime, bufferDays);
+    // Policy-based deadline — checkout_date + prep_days at check-in time
+    const cleaningWindowEnd = computeWindowEnd(b.check_out, checkinTime, bufferDays);
 
     // Next actual booking check-in for this property (date >= checkout date, different booking)
     // Compare by date string so same-day turnovers are found
@@ -194,6 +213,7 @@ export async function GET() {
       check_out: effectiveCheckout,
       next_checkin: effectiveNextCheckin,
       cleaning_window_hours: cleaningWindowHours,
+      cleaning_window_end: cleaningWindowEnd,
       times_missing: timesMissing,
       is_completed: !!completion,
       completed_at: completion?.completed_at || null,
