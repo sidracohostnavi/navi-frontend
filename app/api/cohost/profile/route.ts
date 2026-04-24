@@ -1,23 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUserWithWorkspace } from '@/lib/supabase/authServer';
+import { getCurrentUser, getCurrentUserWithWorkspace } from '@/lib/supabase/authServer';
 import { createCohostServiceClient } from '@/lib/supabase/cohostServer';
 
 export const dynamic = 'force-dynamic';
 
 // ─── GET: return the current user's host profile ──────────────────────────────
+// Only needs the user ID — no workspace lookup needed.
 export async function GET() {
-  const { user, workspaceId } = await getCurrentUserWithWorkspace();
-  if (!user || !workspaceId) {
+  const user = await getCurrentUser();
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const service = createCohostServiceClient();
 
-  const { data: profile } = await service
+  const { data: profile, error } = await service
     .from('host_profiles')
     .select('first_name, last_name, business_name, phone, logo_url')
     .eq('user_id', user.id)
-    .single();
+    .maybeSingle();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
   return NextResponse.json({
     email: user.email,

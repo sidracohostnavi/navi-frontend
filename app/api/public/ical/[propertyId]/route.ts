@@ -10,7 +10,8 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ propertyId: string }> }
 ) {
-  const propertyId = (await params).propertyId;
+  // Strip .ics extension if present (some OTAs append it to the URL)
+  const propertyId = (await params).propertyId.replace(/\.ics$/i, '');
 
   if (!propertyId) {
     return new NextResponse('Missing propertyId', { status: 400 });
@@ -46,8 +47,7 @@ export async function GET(
   return new NextResponse(icalContent, {
     headers: {
       'Content-Type': 'text/calendar; charset=utf-8',
-      'Content-Disposition': `attachment; filename="${property.name.replace(/[^a-z0-9]/gi, '_')}-calendar.ics"`,
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Cache-Control': 'public, max-age=3600',
     },
   });
 }
@@ -55,17 +55,17 @@ export async function GET(
 function generateICal(property: any, bookings: any[]): string {
   const lines: string[] = [];
 
-  // Calendar header
   lines.push('BEGIN:VCALENDAR');
   lines.push('VERSION:2.0');
   lines.push('PRODID:-//Navi CoHost//Calendar//EN');
   lines.push('CALSCALE:GREGORIAN');
   lines.push('METHOD:PUBLISH');
   lines.push(`X-WR-CALNAME:${escapeIcal(property.name)}`);
+  lines.push('X-WR-TIMEZONE:UTC');
 
-  // Add each booking as an event
   for (const booking of bookings) {
-    const uid = booking.external_uid || `navi-${booking.id}`;
+    // Use a stable UID — prefer external_uid so round-tripped events stay deduped
+    const uid = booking.external_uid || `navi-${booking.id}@navicohost.com`;
     const checkIn = new Date(booking.check_in);
     const checkOut = new Date(booking.check_out);
 
@@ -74,19 +74,35 @@ function generateICal(property: any, bookings: any[]): string {
     lines.push(`DTSTAMP:${formatICalDate(new Date())}`);
     lines.push(`DTSTART;VALUE=DATE:${formatICalDateOnly(checkIn)}`);
     lines.push(`DTEND;VALUE=DATE:${formatICalDateOnly(checkOut)}`);
-    lines.push(`SUMMARY:${escapeIcal(booking.guest_name || 'Reserved')}`);
-    lines.push(`STATUS:CONFIRMED`);
-    
-    // Add description with booking details
-    const description = `Booking via ${booking.source === 'direct' ? 'Navi CoHost' : (booking.source || 'Unknown Source')}`;
-    lines.push(`DESCRIPTION:${escapeIcal(description)}`);
-    
+    // Use "Blocked" — this is the standard summary for blocking dates on other OTAs
+    lines.push('SUMMARY:Blocked');
+    lines.push('STATUS:CONFIRMED');
     lines.push('END:VEVENT');
   }
 
   lines.push('END:VCALENDAR');
 
-  return lines.join('\r\n');
+  // RFC 5545: fold lines longer than 75 octets with CRLF + single space
+  return lines.map(foldLine).join('\r\n') + '\r\n';
+}
+
+/** RFC 5545 §3.1 — fold lines at 75 octets */
+function foldLine(line: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(line).length <= 75) return line;
+
+  let result = '';
+  let current = '';
+  for (const char of line) {
+    const next = current + char;
+    if (encoder.encode(next).length > 75) {
+      result += current + '\r\n ';
+      current = char;
+    } else {
+      current = next;
+    }
+  }
+  return result + current;
 }
 
 function formatICalDate(date: Date): string {

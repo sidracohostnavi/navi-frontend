@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { EmailProcessor } from '@/lib/services/email-processor';
+import { MessageProcessor } from '@/lib/services/message-processor';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
             let missingCount = 0;
 
             try {
-                // a) Scan Gmail for new reservation emails
+                // a) Scan Gmail for new emails (stores raw + classifies)
                 const scanResults = await EmailProcessor.processMessages(conn.id, undefined, supabase);
                 scanCount = scanResults.length;
 
@@ -66,6 +67,9 @@ export async function GET(request: NextRequest) {
                 const enrichResult = await EmailProcessor.enrichBookings(conn.id, supabase);
                 enrichCount = enrichResult.enriched;
                 missingCount = enrichResult.missing;
+
+                // c) Process guest messages into conversations + messages tables
+                await MessageProcessor.processGuestMessages(conn.id, supabase);
 
                 success = true;
             } catch (e: any) {

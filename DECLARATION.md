@@ -1,7 +1,7 @@
 # DECLARATION.md — Navi CoHost System Doctrine
 **Status:** Immutable Foundation  
 **Authority:** This document supersedes all other context. When in conflict, this wins.  
-**Last Updated:** 2026-03-06
+**Last Updated:** 2026-04-24
 
 ---
 
@@ -145,7 +145,7 @@ The calendar grid in `CalendarClient.tsx` uses **two independent layers** on the
 
 ---
 
-## Current Stability Status (Updated 2026-03-06)
+## Current Stability Status (Updated 2026-04-24)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -155,6 +155,10 @@ The calendar grid in `CalendarClient.tsx` uses **two independent layers** on the
 | Enrichment matching | ✅ Stable | Code-only matching, no date ambiguity |
 | Display logic | ✅ Stable | Priority: manual > enriched > legacy > raw |
 | Structural separation | ✅ Deployed | iCal cannot overwrite enrichment |
+| Outbound iCal export | ✅ Fixed | RFC 5545 folding, correct URL, OTA-compatible |
+| Connections wizard | ✅ Stable | Auto-detects provider from email domain; success screen post-OAuth |
+| Multi-provider email | ✅ Stable | Gmail OAuth, Microsoft OAuth, SMTP all wired |
+| Messaging UI | ✅ Stable | Inbox, thread view, reply composer, AI drafts |
 | Cron refresh | ⚠️ Timeout issues | Works manually, times out on cron-job.org (30s limit) |
 | ical_sync_log | ⚠️ Minor issue | `'other'` channel constraint, non-blocking |
 

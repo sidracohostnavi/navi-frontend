@@ -3,6 +3,8 @@ import { getGoogleOAuthClient } from '@/lib/utils/google';
 import { google } from 'googleapis';
 import { classifyEmail } from '@/lib/services/email-classifier';
 import { GmailService } from '@/lib/services/gmail-service';
+import { MicrosoftMailService, type MicrosoftRawMessage } from '@/lib/services/microsoft-mail-service';
+import { buildGmailQuery, buildMicrosoftSearchQuery, detectOtaFromSender, type OtaPlatform } from '@/lib/services/ota-senders';
 
 type ExtractedFact = {
     check_in: string;
@@ -18,12 +20,21 @@ type ExtractedFact = {
 import { AppError } from '@/lib/utils/api-errors';
 
 export class EmailProcessor {
-    static async fetchGmailMessages(connectionId: string, label: string, supabaseClient?: any) {
+    /**
+     * @param senderQuery  Optional OTA-mode Gmail q= string (e.g. "from:(@airbnb.com OR @vrbo.com)").
+     *                     When provided, skips label lookup entirely and queries by sender.
+     *                     When omitted, falls back to the legacy labelIds approach using `label`.
+     */
+    static async fetchGmailMessages(connectionId: string, label: string, supabaseClient?: any, senderQuery?: string) {
         const supabase = supabaseClient || await createClient();
 
         console.log(`[EmailProcessor] ========== FETCH GMAIL MESSAGES ==========`);
         console.log(`[EmailProcessor] Connection ID: ${connectionId}`);
-        console.log(`[EmailProcessor] Target Label: ${label}`);
+        if (senderQuery) {
+            console.log(`[EmailProcessor] OTA sender query: ${senderQuery}`);
+        } else {
+            console.log(`[EmailProcessor] Target Label: ${label}`);
+        }
 
         const { success, gmail, error } = await GmailService.createAuthenticatedClient(connectionId, supabase);
 
@@ -32,17 +43,24 @@ export class EmailProcessor {
             return [];
         }
 
-        // 1. Resolve Label ID from Name
-        const labelsRes = await gmail.users.labels.list({ userId: 'me' });
-        const labels = labelsRes.data.labels || [];
-        const targetLabel = labels.find((l: any) => l.name?.toLowerCase() === label.toLowerCase());
+        // 1. Build list params — OTA sender query or legacy label lookup
+        let listParams: Record<string, any>;
+        if (senderQuery) {
+            // OTA mode: query by sender domain — no label ID resolution needed
+            listParams = { userId: 'me', q: senderQuery, maxResults: 100 };
+        } else {
+            // Legacy mode: resolve label name to Gmail label ID
+            const labelsRes = await gmail.users.labels.list({ userId: 'me' });
+            const labels = labelsRes.data.labels || [];
+            const targetLabel = labels.find((l: any) => l.name?.toLowerCase() === label.toLowerCase());
 
-        if (!targetLabel?.id) {
-            console.warn(`[EmailProcessor] ❌ Label "${label}" not found in Gmail account.`);
-            return [];
+            if (!targetLabel?.id) {
+                console.warn(`[EmailProcessor] ❌ Label "${label}" not found in Gmail account.`);
+                return [];
+            }
+            console.log(`[EmailProcessor] Resolved Label "${label}" to ID: ${targetLabel.id}`);
+            listParams = { userId: 'me', labelIds: [targetLabel.id], maxResults: 100 };
         }
-
-        console.log(`[EmailProcessor] Resolved Label "${label}" to ID: ${targetLabel.id}`);
 
         // 2. LIST ALL Message IDs (Pagination)
         let allMessageIds: string[] = [];
@@ -53,9 +71,7 @@ export class EmailProcessor {
         try {
             do {
                 const listRes: any = await gmail.users.messages.list({
-                    userId: 'me',
-                    labelIds: [targetLabel.id],
-                    maxResults: 100, // Max allowed per page
+                    ...listParams,
                     pageToken: nextPageToken
                 });
 
@@ -136,6 +152,39 @@ export class EmailProcessor {
         return results;
     }
 
+    /**
+     * Normalize Microsoft Graph messages into the same shape that
+     * processMessages() expects (which matches the Gmail fetchDetails output).
+     * We store the Graph message ID as gmail_message_id since the column is
+     * just a unique-per-provider string identifier.
+     * The Graph message ID and conversationId are also saved to raw_metadata
+     * so the send route can find them for reply threading.
+     */
+    static normalizeMicrosoftMessages(rawMessages: MicrosoftRawMessage[]): any[] {
+        return rawMessages.map(msg => {
+            const bodyContent = msg.body?.content || msg.bodyPreview || '';
+            const isHtml = msg.body?.contentType?.toLowerCase() === 'html';
+
+            return {
+                gmail_message_id: msg.id,            // Graph ID as the unique key
+                thread_id: msg.conversationId,        // Outlook conversation = Gmail thread
+                subject: msg.subject || '',
+                from: msg.from?.emailAddress?.address || '', // Raw sender for OTA detection
+                snippet: msg.bodyPreview || '',
+                bodyText: isHtml ? '' : bodyContent,
+                bodyHtml: isHtml ? bodyContent : '',
+                // Microsoft-specific fields stored for send threading
+                _microsoft: {
+                    graph_message_id: msg.id,
+                    conversation_id: msg.conversationId,
+                    internet_message_id: msg.internetMessageId,
+                    from: msg.from?.emailAddress?.address,
+                    reply_to: msg.replyTo?.[0]?.emailAddress?.address,
+                },
+            };
+        });
+    }
+
     private static async fetchDetails(gmail: any, messageIds: string[]) {
         const messageDetails: any[] = [];
 
@@ -154,6 +203,7 @@ export class EmailProcessor {
                 const payload = detail.data.payload;
                 const headers = payload?.headers || [];
                 const subject = headers.find((h: any) => h.name === 'Subject')?.value || '';
+                const from = headers.find((h: any) => h.name === 'From')?.value || '';
                 const snippet = detail.data.snippet || '';
 
                 // Extract Body
@@ -183,7 +233,9 @@ export class EmailProcessor {
                 return {
                     id: detail.data.id || id, // API ID
                     gmail_message_id: detail.data.id || id, // Explicit field for processor
+                    thread_id: detail.data.threadId || null, // Gmail thread grouping
                     subject,
+                    from,                     // Raw From header for OTA detection
                     snippet,
                     bodyText: bodyText || snippet,
                     bodyHtml: bodyHtml
@@ -223,17 +275,55 @@ export class EmailProcessor {
 
             const { data: conn } = await supabase
                 .from('connections')
-                .select('reservation_label')
+                .select('reservation_label, email_provider, ota_platforms, custom_sender_query')
                 .eq('id', connectionId)
                 .single();
 
+            const provider = (conn?.email_provider as string) || 'gmail';
+            const otaPlatforms = (conn?.ota_platforms as OtaPlatform[]) ?? [];
+
+            // SMTP connections are send-only — no inbox to ingest from
+            if (provider === 'smtp') {
+                console.log(`[EmailProcessor] Skipping ingest for SMTP connection ${connectionId} (send-only)`);
+                return [];
+            }
+
+            // Build OTA sender queries when ota_platforms is configured
+            const gmailSenderQuery = buildGmailQuery(otaPlatforms, conn?.custom_sender_query);
+            const microsoftSearchQuery = buildMicrosoftSearchQuery(otaPlatforms);
+            const isOtaMode = gmailSenderQuery !== null || microsoftSearchQuery !== null;
+
+            // Legacy label fallback — used when ota_platforms is empty
             const label = conn?.reservation_label || 'Airbnb';
 
-            // 0. PRE-FLIGHT: Label Conflict Check
-            await this.checkForLabelConflict(supabase, connectionId, label);
+            if (isOtaMode) {
+                console.log(`[EmailProcessor] OTA mode — platforms: [${otaPlatforms.join(', ')}]`);
+            } else {
+                console.log(`[EmailProcessor] Legacy label mode — label: "${label}"`);
+                // 0. PRE-FLIGHT: Label Conflict Check (Gmail only — not needed in OTA mode)
+                if (provider === 'gmail') {
+                    await this.checkForLabelConflict(supabase, connectionId, label);
+                }
+            }
 
-            // 1. Fetch fresh new emails from Google
-            const fetchedMsgs = await this.fetchGmailMessages(connectionId, label, supabase);
+            // 1. Fetch fresh new emails from the provider
+            let fetchedMsgs: any[];
+            if (provider === 'microsoft') {
+                const raw = await MicrosoftMailService.fetchMessages(
+                    connectionId,
+                    isOtaMode ? 'Inbox' : label,
+                    supabase,
+                    microsoftSearchQuery ?? undefined,
+                );
+                fetchedMsgs = this.normalizeMicrosoftMessages(raw);
+            } else {
+                fetchedMsgs = await this.fetchGmailMessages(
+                    connectionId,
+                    label,
+                    supabase,
+                    gmailSenderQuery ?? undefined,
+                );
+            }
             
             // 2. Fetch orphaned/aborted emails natively stuck in the local database
             const { data: orphanedMsgs } = await supabase
@@ -277,6 +367,16 @@ export class EmailProcessor {
             const classification = classifyEmail(msg.subject, textForClassification);
 
             // 3. STORE RAW MESSAGE (Always)
+            // processed_at = null for types we process in a second pass:
+            //   - reservation_confirmation → processed by enrichBookings()
+            //   - guest_message           → processed by MessageProcessor.processGuestMessages()
+            const needsSecondPass =
+                classification.message_type === 'reservation_confirmation' ||
+                classification.message_type === 'guest_message';
+
+            // Detect which OTA sent this email (from sender domain)
+            const otaSource = detectOtaFromSender(msg.from || '', otaPlatforms);
+
             const { error: msgError } = await supabase
                 .from('gmail_messages')
                 .insert({
@@ -284,13 +384,16 @@ export class EmailProcessor {
                     connection_id: connectionId,
                     subject: msg.subject,
                     snippet: msg.snippet,
+                    thread_id: msg.thread_id || null,
+                    ota_source: otaSource,
+                    message_type: classification.message_type,
                     raw_metadata: {
                         full_text: msg.bodyText,
                         full_html: msg.bodyHtml,
                         original_msg: msg,
                         classification
                     },
-                    processed_at: classification.message_type === 'reservation_confirmation' ? null : new Date().toISOString()
+                    processed_at: needsSecondPass ? null : new Date().toISOString()
                 });
 
             if (msgError) {

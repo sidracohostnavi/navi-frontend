@@ -1,11 +1,11 @@
 // /app/cohost/messaging/layout.tsx
+// Provides AuthProvider context for useAuth() calls in messaging page components.
+// Auth protection and the header are handled by the parent app/cohost/layout.tsx.
 'use client'
 
-import { ProtectedRoute } from '@/lib/components/ProtectedRoute'
-import { CohostHeader } from '@/lib/components/CohostHeader'
+import { AuthProvider } from '@/lib/contexts/AuthContext'
 
-// Prevent SSG since this requires AuthProvider at runtime
-export const dynamic = 'force-dynamic';
+export const dynamic = 'force-dynamic'
 
 export default function MessagingLayout({
   children,
@@ -13,11 +13,8 @@ export default function MessagingLayout({
   children: React.ReactNode
 }) {
   return (
-    <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50">
-        <CohostHeader />
-        <main>{children}</main>
-      </div>
-    </ProtectedRoute>
+    <AuthProvider>
+      {children}
+    </AuthProvider>
   )
 }

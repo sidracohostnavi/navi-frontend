@@ -484,6 +484,27 @@ export async function GET(request: NextRequest) {
     return true;
   });
 
+  // ─── FEED COLOR LOOKUP ──────────────────────────────────────────────
+  // Fetch color + source_name for every iCal feed referenced by the returned
+  // bookings. This lets the calendar color booking windows immediately on sync
+  // without waiting for email enrichment.
+  const feedIds = new Set(
+    finalBookings.map((b: any) => b.source_feed_id).filter(Boolean)
+  );
+  const feedColorMap = new Map<string, { name: string; color: string | null }>();
+  if (feedIds.size > 0) {
+    const { data: feedData } = await service
+      .from('ical_feeds')
+      .select('id, source_name, color')
+      .in('id', Array.from(feedIds));
+    if (feedData) {
+      for (const f of feedData) {
+        feedColorMap.set(f.id, { name: f.source_name, color: f.color ?? null });
+      }
+    }
+  }
+  // ─── END FEED COLOR LOOKUP ──────────────────────────────────────────
+
   // Permission masking (AFTER final booking filtering)
   const permsByWorkspace = new Map(
     (allowedMemberships as any[]).map((m: any) => [m.workspace_id, m])
@@ -495,6 +516,8 @@ export async function GET(request: NextRequest) {
     const canViewGuestCount = perms?.can_view_guest_count !== false;
     const canViewNotes = perms?.can_view_booking_notes !== false;
 
+    const feedInfo = b.source_feed_id ? feedColorMap.get(b.source_feed_id) : null;
+
     return {
       ...b,
       guest_name: canViewGuestName ? b.guest_name : null,
@@ -502,6 +525,9 @@ export async function GET(request: NextRequest) {
       guest_last_initial: canViewGuestName ? b.guest_last_initial : null,
       guest_count: canViewGuestCount ? b.guest_count : null,
       manual_notes: canViewNotes ? b.manual_notes : null,
+      // Feed-based color and label — drives booking window appearance on calendar
+      source_color: feedInfo?.color ?? null,
+      source_label: feedInfo?.name ?? null,
     };
   });
 

@@ -104,23 +104,27 @@ export async function GET() {
   // ─── Properties for names, times, and cleaning buffer days ──────────────
   let propQuery = service
     .from('cohost_properties')
-    .select('id, name, check_in_time, check_out_time, cleaning_post_days, cleaning_pre_days')
+    .select('id, name, check_in_time, check_out_time, cleaning_post_days, cleaning_pre_days, preparation_time_days')
     .eq('workspace_id', workspaceId);
   if (allowedPropertyIds !== null && allowedPropertyIds.length > 0) {
     propQuery = propQuery.in('id', allowedPropertyIds);
   }
   const { data: properties } = await propQuery;
-  // propMap: id → { name, check_in_time, check_out_time, cleaning_post_days, cleaning_pre_days }
   const propMap = new Map((properties || []).map((p: any) => [p.id, p]));
 
-  // Apply a property's standard time (HH:MM 24h) to a booking date ISO string.
+  // Add N days to a YYYY-MM-DD string using pure UTC arithmetic (no DST issues).
+  function addDays(dateStr: string, days: number): string {
+    if (days === 0) return dateStr;
+    const [y, mo, d] = dateStr.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, mo - 1, d + days));
+    return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  // Returns a local-time string (no UTC offset) so the client renders it in
+  // the browser's local timezone — same timezone the host configured these times in.
   function applyPropTime(dateIso: string, timeStr: string | null): string {
     if (!timeStr) return dateIso;
-    const datePart = dateIso.split('T')[0];
-    const [h, m] = timeStr.split(':').map(Number);
-    const d = new Date(`${datePart}T00:00:00`);
-    d.setHours(h, m, 0, 0);
-    return d.toISOString();
+    return `${dateIso.split('T')[0]}T${timeStr}:00`;
   }
 
   // Policy-based cleaning deadline: checkout_date + buffer_days at check_in_time.
@@ -132,19 +136,12 @@ export async function GET() {
     bufferDays: number
   ): string | null {
     if (!checkinTime) return null;
-    const datePart = checkoutDateIso.split('T')[0];
-    const [h, m] = checkinTime.split(':').map(Number);
-    const d = new Date(`${datePart}T00:00:00`);
-    d.setDate(d.getDate() + bufferDays);
-    d.setHours(h, m, 0, 0);
-    return d.toISOString();
+    const targetDate = addDays(checkoutDateIso.split('T')[0], bufferDays);
+    return `${targetDate}T${checkinTime}:00`;
   }
 
   // Cleaning window = hours from (checkout date at check_out_time)
   // to (checkout date + buffer days at check_in_time).
-  // Buffer = cleaning_post_days only — pre and post blocks overlap on the
-  // checkout date itself, so only post_days determines how many days are
-  // actually added before the next check-in can occur.
   function computeWindowHours(
     checkoutDateIso: string,
     checkoutTime: string | null,
@@ -153,14 +150,9 @@ export async function GET() {
   ): number | null {
     if (!checkoutTime || !checkinTime) return null;
     const datePart = checkoutDateIso.split('T')[0];
-    const [coH, coM] = checkoutTime.split(':').map(Number);
-    const [ciH, ciM] = checkinTime.split(':').map(Number);
-    const start = new Date(`${datePart}T00:00:00`);
-    start.setHours(coH, coM, 0, 0);
-    const end = new Date(`${datePart}T00:00:00`);
-    end.setDate(end.getDate() + bufferDays);
-    end.setHours(ciH, ciM, 0, 0);
-    const ms = end.getTime() - start.getTime();
+    const startStr = `${datePart}T${checkoutTime}:00`;
+    const endStr = `${addDays(datePart, bufferDays)}T${checkinTime}:00`;
+    const ms = new Date(endStr).getTime() - new Date(startStr).getTime();
     return ms > 0 ? ms / 3600000 : 0;
   }
 
@@ -181,7 +173,9 @@ export async function GET() {
     const checkoutTime = prop?.check_out_time || null;
     const checkinTime = prop?.check_in_time || null;
     const timesMissing = !checkoutTime || !checkinTime;
-    const bufferDays = prop?.cleaning_post_days || 0;
+    // Use preparation_time_days as the source of truth (set by the host in Pricing settings).
+    // cleaning_post_days is a derived sync copy — fall back to it if prep time is missing.
+    const bufferDays = prop?.preparation_time_days ?? prop?.cleaning_post_days ?? 0;
 
     // Effective checkout: booking date + property checkout time
     const effectiveCheckout = applyPropTime(b.check_out, checkoutTime);
@@ -281,7 +275,7 @@ export async function GET() {
   // ─── Completed tasks this month ───────────────────────────────────────────
   let completedTaskQuery = service
     .from('task_completions')
-    .select('id, task_id, completed_by_user_id, completed_at, hours_worked, calculated_amount_owed, completion_note')
+    .select('id, task_id, completed_by_user_id, completed_at, hours_worked, calculated_amount_owed, completion_note, host_payment_confirmed_at')
     .gte('completed_at', monthStart)
     .order('completed_at', { ascending: false });
 
@@ -290,7 +284,6 @@ export async function GET() {
   const { data: allCompletedTasks } = await completedTaskQuery;
 
   // Filter to only tasks in this workspace (and for cleaner: only their completions)
-  const workspaceTaskIds = new Set(taskIds);
   // Also need completed tasks for tasks that may now be inactive/cancelled
   // Fetch all workspace task IDs for the month filter
   const { data: allWorkspaceTasks } = await service
@@ -324,6 +317,10 @@ export async function GET() {
   }
   for (const c of completedCleaningsRaw || []) userIdSet.add(c.completed_by_user_id);
   for (const c of completedTasks) userIdSet.add(c.completed_by_user_id);
+  // Include user IDs from latest task completions (for host dashboard display)
+  for (const [, completion] of latestCompletionMap) {
+    if (completion.completed_by_user_id) userIdSet.add(completion.completed_by_user_id);
+  }
 
   const emailMap = new Map<string, string>();
   await Promise.all(
@@ -369,13 +366,17 @@ export async function GET() {
   const enrichedTasks = (tasks || []).map((t: any) => {
     const effectiveDue = t.task_type === 'recurring' ? t.next_due_at : t.due_at;
     const isOverdue = effectiveDue ? new Date(effectiveDue) < nowDt : false;
+    const latestCompletion = latestCompletionMap.get(t.id) || null;
     return {
       ...t,
       property_name: t.property?.name || null,
       assigned_user_email: t.assigned_user_id ? (emailMap.get(t.assigned_user_id) || null) : null,
       is_overdue: isOverdue,
       effective_due_at: effectiveDue || null,
-      latest_completion: latestCompletionMap.get(t.id) || null,
+      latest_completion: latestCompletion ? {
+        ...latestCompletion,
+        completed_by_email: emailMap.get(latestCompletion.completed_by_user_id) || null,
+      } : null,
     };
   });
 
@@ -385,6 +386,17 @@ export async function GET() {
     completed_by_email: c.completed_by_user_id ? (emailMap.get(c.completed_by_user_id) || null) : null,
   }));
 
+  // Fetch the caller's own hourly rate so the cleaner view can show live pay estimates
+  const { data: myPayRate } = await service
+    .from('team_pay_rates')
+    .select('hourly_rate')
+    .eq('workspace_id', workspaceId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  const hourlyRate: number | null = myPayRate?.hourly_rate
+    ? parseFloat(myPayRate.hourly_rate)
+    : null;
+
   return NextResponse.json({
     cleanings: cleaningsEnriched,
     completedCleanings,
@@ -392,5 +404,6 @@ export async function GET() {
     completedTasks: completedTasksEnriched,
     role,
     currentUserId: user.id,
+    hourlyRate,
   });
 }

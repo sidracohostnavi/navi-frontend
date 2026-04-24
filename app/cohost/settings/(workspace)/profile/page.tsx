@@ -40,6 +40,9 @@ export default function ProfileSettingsPage() {
           phone: data.phone || '',
         });
         setLogoUrl(data.logo_url || null);
+      } else {
+        const d = await res.json();
+        setError(d.error || 'Failed to load profile');
       }
     } finally {
       setLoading(false);

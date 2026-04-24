@@ -90,6 +90,8 @@ export default function CohostLayout({
   // Helper to determine active state
   const isActive = (path: string) => {
     if (path === '/cohost/dashboard' && pathname === '/cohost') return false;
+    // Inbox tab: highlight for any /cohost/messaging/* route
+    if (path === '/cohost/messaging/inbox') return pathname.startsWith('/cohost/messaging');
     return pathname.startsWith(path);
   };
 
@@ -199,8 +201,9 @@ export default function CohostLayout({
                   {[
                     { href: '/cohost/dashboard', label: 'Dashboard', perm: 'canViewDashboard' as keyof FeaturePermissions },
                     { href: '/cohost/properties', label: 'Properties', perm: 'canViewProperties' as keyof FeaturePermissions },
+                    { href: '/cohost/dailyops', label: 'Daily Ops', perm: 'canViewTasks' as keyof FeaturePermissions },
                     { href: '/cohost/calendar', label: 'Calendar', perm: 'canViewCalendar' as keyof FeaturePermissions },
-                    { href: '/cohost/messaging', label: 'Messaging', perm: 'canViewMessaging' as keyof FeaturePermissions },
+                    { href: '/cohost/messaging/inbox', label: 'Inbox', perm: 'canViewMessaging' as keyof FeaturePermissions },
                     { href: '/cohost/settings', label: 'Settings', perm: 'canViewSettingsTab' as keyof FeaturePermissions },
                   ]
                     .filter(item => !userPerms || userPerms[item.perm])

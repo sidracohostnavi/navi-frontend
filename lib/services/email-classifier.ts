@@ -50,16 +50,22 @@ const BLOCKLIST_RULES: BlocklistRule[] = [
         ],
         description: 'Inquiry signals'
     },
-    // Thread/reply signals
+    // Guest message relay signals (all platforms)
     {
         type: 'guest_message',
         patterns: [
-            /^Re:/i,    // Subject starts with Re:
-            /^RE:/,     // Subject starts with RE:
+            /^Re:/i,                          // Reply thread
+            /^RE:/,                           // Reply thread (caps)
             /has replied to your message/i,
-            /sent you a message/i,
+            /sent you a message/i,            // Airbnb: "[Name] sent you a message"
+            /^Message from\s+/i,              // VRBO: "Message from [Name]"
+            /^New message from\s+/i,          // VRBO variations
+            /You have a new message from/i,   // Various platforms
+            /has sent you a message/i,        // Variations
+            /new message about your listing/i,
+            /responded to your listing/i,
         ],
-        description: 'Reply/thread signals'
+        description: 'Guest message relay signals'
     },
     // Cancellation workflow
     {

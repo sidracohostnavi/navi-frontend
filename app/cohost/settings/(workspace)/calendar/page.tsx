@@ -17,6 +17,7 @@ type ICalFeed = {
     source_type: string;
     ical_url: string;
     is_active: boolean;
+    color?: string | null;
     last_synced_at: string | null;
     last_sync_status: 'success' | 'error' | null;
     last_error: string | null;
@@ -28,6 +29,42 @@ type ICalFeed = {
     last_booking_count?: number;
     last_response_snippet?: string;
 };
+
+// Default colors per platform — shown on calendar booking windows
+const FEED_DEFAULT_COLORS: Record<string, string> = {
+    airbnb:      '#FF5A5F',
+    vrbo:        '#3B82F6',
+    booking:     '#003580',
+    'booking.com': '#003580',
+    lodgify:     '#7C3AED',
+    other:       '#008080',
+};
+
+function getFeedDefaultColor(sourceName: string): string {
+    const key = sourceName.toLowerCase().replace(/\s+/g, '').replace('.', '');
+    const match = Object.keys(FEED_DEFAULT_COLORS).find(k => key.includes(k));
+    return match ? FEED_DEFAULT_COLORS[match] : FEED_DEFAULT_COLORS.other;
+}
+
+// Derive a human-readable OTA platform label from the iCal feed URL domain
+function getSourcePlatformLabel(icalUrl: string): string {
+    try {
+        const hostname = new URL(icalUrl).hostname.toLowerCase().replace(/^www\./, '');
+        if (hostname.includes('airbnb.'))      return 'Airbnb';
+        if (hostname.includes('vrbo.') || hostname.includes('homeaway.')) return 'VRBO';
+        if (hostname.includes('booking.'))     return 'Booking.com';
+        if (hostname.includes('lodgify.'))     return 'Lodgify';
+        if (hostname.includes('hipcamp.'))     return 'Hipcamp';
+        if (hostname.includes('tripadvisor.')) return 'TripAdvisor';
+        if (hostname.includes('expedia.'))     return 'Expedia';
+        if (hostname.includes('furnished'))    return 'Furnished Finder';
+        // Fall back to the bare domain name, capitalised
+        const bare = hostname.split('.')[0];
+        return bare.charAt(0).toUpperCase() + bare.slice(1);
+    } catch {
+        return 'iCal';
+    }
+}
 
 export default function CalendarSettingsPage() {
     const supabase = createClient();
@@ -41,6 +78,8 @@ export default function CalendarSettingsPage() {
     const [syncingFeedId, setSyncingFeedId] = useState<string | null>(null);
     const [viewingFeedId, setViewingFeedId] = useState<string | null>(null); // For modal
     const [isAdding, setIsAdding] = useState(false);
+    const [editingNameFeedId, setEditingNameFeedId] = useState<string | null>(null);
+    const [editingNameValue, setEditingNameValue] = useState('');
 
     // Form State
     const [newFeedName, setNewFeedName] = useState('');
@@ -97,6 +136,8 @@ export default function CalendarSettingsPage() {
         else if (lowerName.includes('vrbo')) type = 'vrbo';
         else if (lowerName.includes('booking')) type = 'booking';
 
+        const defaultColor = getFeedDefaultColor(finalName);
+
         const { data, error } = await supabase
             .from('ical_feeds')
             .insert({
@@ -104,7 +145,8 @@ export default function CalendarSettingsPage() {
                 source_name: finalName,
                 source_type: type,
                 ical_url: newFeedUrl,
-                is_active: true
+                is_active: true,
+                color: defaultColor,
             })
             .select()
             .single();
@@ -149,6 +191,19 @@ export default function CalendarSettingsPage() {
             setFeeds(prevFeeds);
             alert('Error deleting feed');
         }
+    };
+
+    const handleUpdateFeedName = async (feedId: string, newName: string) => {
+        const trimmed = newName.trim();
+        if (!trimmed) { setEditingNameFeedId(null); return; }
+        setFeeds(feeds.map(f => f.id === feedId ? { ...f, source_name: trimmed } : f));
+        await supabase.from('ical_feeds').update({ source_name: trimmed }).eq('id', feedId);
+        setEditingNameFeedId(null);
+    };
+
+    const handleUpdateFeedColor = async (feedId: string, color: string) => {
+        setFeeds(feeds.map(f => f.id === feedId ? { ...f, color } : f));
+        await supabase.from('ical_feeds').update({ color }).eq('id', feedId);
     };
 
     const handleSyncFeed = async (feedId: string) => {
@@ -217,7 +272,7 @@ export default function CalendarSettingsPage() {
 
     const handleCopyExportUrl = () => {
         if (!selectedPropertyId) return;
-        const url = `https://navicohost.com/ical/export/${selectedPropertyId}.ics`;
+        const url = `https://navicohost.com/api/public/ical/${selectedPropertyId}`;
         navigator.clipboard.writeText(url);
         alert('Export URL copied to clipboard!');
     };
@@ -296,7 +351,7 @@ export default function CalendarSettingsPage() {
                         <div className="p-6">
                             <div className="flex gap-2">
                                 <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 text-sm text-gray-600 font-mono overflow-hidden whitespace-nowrap text-ellipsis">
-                                    https://navicohost.com/ical/export/{selectedProperty.id}.ics
+                                    https://navicohost.com/api/public/ical/{selectedProperty.id}
                                 </div>
                                 <button
                                     onClick={handleCopyExportUrl}
@@ -413,12 +468,46 @@ export default function CalendarSettingsPage() {
                                     <div key={feed.id} className="p-6 flex items-center justify-between group hover:bg-gray-50 transition-colors">
                                         <div>
                                             <div className="flex items-center gap-3">
-                                                <h3 className="text-sm font-bold text-gray-900">{feed.source_name}</h3>
-                                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize border ${feed.source_type === 'airbnb' ? 'bg-rose-50 text-rose-700 border-rose-100' :
-                                                    feed.source_type === 'vrbo' ? 'bg-indigo-50 text-indigo-700 border-indigo-100' :
-                                                        'bg-gray-100 text-gray-700 border-gray-200'
-                                                    }`}>
-                                                    {feed.source_type}
+                                                {/* Color swatch — click to change calendar booking color */}
+                                                <label
+                                                    className="relative cursor-pointer flex-shrink-0"
+                                                    title="Calendar color for this feed's bookings"
+                                                >
+                                                    <input
+                                                        type="color"
+                                                        value={feed.color || getFeedDefaultColor(feed.source_name)}
+                                                        onChange={e => handleUpdateFeedColor(feed.id, e.target.value)}
+                                                        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                                                    />
+                                                    <div
+                                                        className="w-5 h-5 rounded-full border-2 border-white shadow-md ring-1 ring-gray-200"
+                                                        style={{ backgroundColor: feed.color || getFeedDefaultColor(feed.source_name) }}
+                                                    />
+                                                </label>
+                                                {editingNameFeedId === feed.id ? (
+                                                    <input
+                                                        type="text"
+                                                        value={editingNameValue}
+                                                        autoFocus
+                                                        onChange={e => setEditingNameValue(e.target.value)}
+                                                        onBlur={() => handleUpdateFeedName(feed.id, editingNameValue)}
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') handleUpdateFeedName(feed.id, editingNameValue);
+                                                            if (e.key === 'Escape') setEditingNameFeedId(null);
+                                                        }}
+                                                        className="text-sm font-bold text-gray-900 border-b border-blue-400 outline-none bg-transparent max-w-[180px]"
+                                                    />
+                                                ) : (
+                                                    <h3
+                                                        className="text-sm font-bold text-gray-900 cursor-pointer hover:text-blue-600"
+                                                        title="Click to rename"
+                                                        onClick={() => { setEditingNameFeedId(feed.id); setEditingNameValue(feed.source_name); }}
+                                                    >
+                                                        {feed.source_name}
+                                                    </h3>
+                                                )}
+                                                <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700 border border-yellow-200">
+                                                    {getSourcePlatformLabel(feed.ical_url)}
                                                 </span>
                                                 {!feed.is_active && (
                                                     <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">

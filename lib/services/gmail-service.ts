@@ -282,6 +282,106 @@ export class GmailService {
     }
 
     /**
+     * Send a reply into an existing Gmail thread.
+     *
+     * Used for gmail_relay conversations: the host's reply goes back into
+     * the Airbnb/VRBO relay thread, which forwards it to the guest.
+     *
+     * @param connectionId  - The Gmail connection to send from
+     * @param threadId      - Gmail threadId (cohost_conversations.gmail_thread_id)
+     * @param replyToMsgId  - Gmail message ID of the last inbound message (for In-Reply-To)
+     * @param replyBody     - Plain-text body of the reply
+     *
+     * Fetches From/Reply-To/Subject/Message-ID from the original message so
+     * the reply headers are correct for proper relay threading.
+     */
+    static async sendReply(
+        connectionId: string,
+        threadId: string,
+        replyToMsgId: string,
+        replyBody: string,
+        supabaseClient?: any
+    ): Promise<{ success: boolean; sentGmailMessageId?: string; error?: string }> {
+        const supabase = supabaseClient || await createClient();
+
+        // 1. Get authenticated Gmail client
+        const clientResult = await this.createAuthenticatedClient(connectionId, supabase);
+        if (!clientResult.success || !clientResult.gmail) {
+            return { success: false, error: clientResult.error || 'Failed to authenticate Gmail client' };
+        }
+        const gmail = clientResult.gmail;
+
+        // 2. Fetch headers from the message we're replying to
+        let replyTo: string;
+        let subject: string;
+        let messageId: string;
+        let references: string;
+
+        try {
+            const detail = await gmail.users.messages.get({
+                userId: 'me',
+                id: replyToMsgId,
+                format: 'metadata',
+                metadataHeaders: ['From', 'Reply-To', 'Subject', 'Message-ID', 'References'],
+            });
+
+            const headers: { name: string; value: string }[] = detail.data.payload?.headers || [];
+            const h = (name: string) => headers.find(x => x.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+            // Prefer Reply-To (relay address) over From for Airbnb/VRBO threads
+            replyTo   = h('Reply-To') || h('From');
+            subject   = h('Subject');
+            messageId = h('Message-ID');
+            references = h('References');
+
+            if (!replyTo) {
+                return { success: false, error: 'Could not determine reply-to address from original message' };
+            }
+        } catch (err: any) {
+            console.error('[GmailService.sendReply] Failed to fetch message headers:', err.message);
+            return { success: false, error: `Failed to fetch message headers: ${err.message}` };
+        }
+
+        // 3. Build MIME reply
+        const replySubject = subject.startsWith('Re:') ? subject : `Re: ${subject}`;
+
+        // References chain: existing references + current Message-ID
+        const newReferences = [references, messageId].filter(Boolean).join(' ');
+
+        const mimeLines = [
+            `To: ${replyTo}`,
+            `Subject: ${replySubject}`,
+            `In-Reply-To: ${messageId}`,
+            `References: ${newReferences}`,
+            `Content-Type: text/plain; charset=UTF-8`,
+            ``,
+            replyBody,
+        ].join('\r\n');
+
+        const rawEncoded = Buffer.from(mimeLines).toString('base64url');
+
+        // 4. Send
+        try {
+            const sendResult = await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: {
+                    raw: rawEncoded,
+                    threadId,
+                },
+            });
+
+            await this.recordSuccess(connectionId, supabase);
+
+            console.log(`[GmailService.sendReply] ✅ Reply sent, Gmail message ID: ${sendResult.data.id}`);
+            return { success: true, sentGmailMessageId: sendResult.data.id };
+
+        } catch (err: any) {
+            console.error('[GmailService.sendReply] Send failed:', err.message);
+            return { success: false, error: `Gmail send failed: ${err.message}` };
+        }
+    }
+
+    /**
      * Record a successful Gmail API operation
      */
     static async recordSuccess(connectionId: string, supabaseClient?: any): Promise<void> {

@@ -19,6 +19,7 @@ interface Cleaning {
   check_out: string;
   next_checkin: string | null;
   cleaning_window_hours: number | null;
+  cleaning_window_end: string | null;
   times_missing: boolean;
   is_completed: boolean;
   completed_at: string | null;
@@ -59,6 +60,7 @@ interface CompletedTask {
   hours_worked: number | null;
   calculated_amount_owed: number | null;
   completion_note: string | null;
+  host_payment_confirmed_at: string | null;
 }
 
 interface TeamMember {
@@ -110,11 +112,19 @@ function getDateHeading(iso: string): string {
   return dateStr;
 }
 
-function fmtCleaningWindow(checkOut: string, windowHours: number | null): string {
-  const from = fmtTime(checkOut);
-  if (windowHours === null || windowHours <= 0) return from;
-  const endMs = new Date(checkOut).getTime() + windowHours * 3_600_000;
-  return `${from} – ${fmtTime(new Date(endMs).toISOString())}`;
+function fmtShortDateTime(iso: string): string {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${date} ${time}`;
+}
+
+function fmtCleaningWindow(checkOut: string, windowEnd: string | null, windowHours: number | null): string {
+  if (!windowEnd || windowHours === null || windowHours <= 0) return fmtShortDateTime(checkOut);
+  const h = Math.floor(windowHours);
+  const m = Math.round((windowHours - h) * 60);
+  const hoursLabel = m === 0 ? `${h} hr` : `${h} hr ${m} min`;
+  return `${fmtShortDateTime(checkOut)} – ${fmtShortDateTime(windowEnd)} | ${hoursLabel}`;
 }
 
 function isTodayDate(iso: string) {
@@ -408,7 +418,7 @@ function CleaningRow({
             <div className="flex items-center gap-1 mt-0.5 text-xs text-gray-400">
               <Clock className="w-3 h-3 shrink-0" />
               <span className={tight && !isCompleted ? 'text-red-500 font-medium' : ''}>
-                {fmtCleaningWindow(cleaning.check_out, cleaning.cleaning_window_hours)}
+                {fmtCleaningWindow(cleaning.check_out, cleaning.cleaning_window_end, cleaning.cleaning_window_hours)}
               </span>
             </div>
           )}
@@ -1067,29 +1077,35 @@ export default function DashboardClient({ stats }: { stats: Stats }) {
               {completedTasks.length === 0 ? (
                 <EmptyState message="No completed tasks this month." />
               ) : (
-                completedTasks.map(c => (
-                  <div key={c.id} className="bg-white border border-gray-200 rounded-xl p-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <ClipboardList className="w-4 h-4 text-green-600 shrink-0" />
-                        <span className="font-semibold text-gray-900 text-sm">{c.task_title || 'Task'}</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Done</span>
-                      </div>
-                      <div className="text-xs text-gray-500 space-y-0.5">
-                        {c.property_name && <div className="flex items-center gap-1"><Home className="w-3 h-3" />{c.property_name}</div>}
-                        <div>Completed: {fmtDateTime(c.completed_at)}</div>
-                        {c.completed_by_email && <div>By: {c.completed_by_email}</div>}
-                        {c.hours_worked && (
-                          <div>
-                            {c.hours_worked}h worked
-                            {c.calculated_amount_owed ? ` · ${fmtMoney(c.calculated_amount_owed)} owed` : ''}
-                          </div>
-                        )}
-                        {c.completion_note && <div className="text-gray-400 italic">"{c.completion_note}"</div>}
+                completedTasks.map(c => {
+                  const isPaid = !!c.host_payment_confirmed_at;
+                  const isPendingPay = !!(c.calculated_amount_owed && !c.host_payment_confirmed_at);
+                  return (
+                    <div key={c.id} className={`bg-white border rounded-xl p-4 ${isPendingPay ? 'border-amber-200' : isPaid ? 'border-green-200' : 'border-gray-200'}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <ClipboardList className="w-4 h-4 text-green-600 shrink-0" />
+                          <span className="font-semibold text-gray-900 text-sm">{c.task_title || 'Task'}</span>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Done</span>
+                          {isPaid && <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Paid</span>}
+                          {isPendingPay && <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Pending payment</span>}
+                        </div>
+                        <div className="text-xs text-gray-500 space-y-0.5">
+                          {c.property_name && <div className="flex items-center gap-1"><Home className="w-3 h-3" />{c.property_name}</div>}
+                          <div>Completed: {fmtDateTime(c.completed_at)}</div>
+                          {c.completed_by_email && <div>By: {c.completed_by_email}</div>}
+                          {c.hours_worked && (
+                            <div className={isPendingPay ? 'text-amber-700 font-medium' : isPaid ? 'text-green-700 font-medium' : ''}>
+                              {c.hours_worked}h worked
+                              {c.calculated_amount_owed ? ` · ${fmtMoney(c.calculated_amount_owed)} ${isPaid ? '(paid)' : 'owed'}` : ''}
+                            </div>
+                          )}
+                          {c.completion_note && <div className="text-gray-400 italic">"{c.completion_note}"</div>}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}

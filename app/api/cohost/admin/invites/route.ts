@@ -141,6 +141,18 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ success: true });
     }
 
+    // Update note/name action
+    if (body.action === 'update_note') {
+        const note = typeof body.note === 'string' ? body.note.trim() || null : null;
+        const { error: noteError } = await service
+            .from('cohost_signup_invites')
+            .update({ note })
+            .eq('id', id);
+
+        if (noteError) return NextResponse.json({ error: noteError.message }, { status: 500 });
+        return NextResponse.json({ success: true });
+    }
+
     // Default PATCH action: revoke
     const { error } = await service
         .from('cohost_signup_invites')

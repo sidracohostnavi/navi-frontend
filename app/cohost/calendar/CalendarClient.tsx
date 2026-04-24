@@ -74,6 +74,9 @@ type Booking = {
   enrichedGuestCount?: number;
   enrichedConnectionId?: string;
   enrichedAt?: string;
+  // Feed-based color and label (from ical_feeds.color / source_name)
+  sourceColor?: string | null;
+  sourceFeedLabel?: string | null;
   type?: 'booking' | 'cleaning';
 };
 
@@ -592,7 +595,10 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
       manualGuestName: b.manual_guest_name,
       manualGuestCount: b.manual_guest_count,
       manualNotes: b.manual_notes,
-      manuallyResolvedAt: b.manually_resolved_at
+      manuallyResolvedAt: b.manually_resolved_at,
+      // Feed-based color and label
+      sourceColor: b.source_color ?? null,
+      sourceFeedLabel: b.source_label ?? null
     }));
 
     // Discover orphaned properties (bookings with property_id not in current properties list)
@@ -1188,7 +1194,8 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                   // priority: Manual Override > Server-Side Enrichment > Default (Gray)
 
                   const isManuallyResolved = !!booking.manuallyResolvedAt;
-                  const isEnriched = isManuallyResolved || !!booking.matchedConnectionId || !!booking.guestName;
+                  // isEnriched: has something meaningful to show (name, color, or source)
+                  const isEnriched = isManuallyResolved || !!booking.matchedConnectionId || !!booking.guestName || !!booking.sourceColor;
 
                   // Calculate span for display
                   let span = getSpan(booking.startDate, booking.endDate);
@@ -1238,26 +1245,27 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                     displayGuestCount = booking.manualGuestCount ?? displayGuestCount;
                     if (booking.manualConnectionId) {
                       resolvedConnectionColor = getConnectionColor(booking.manualConnectionId);
-                      labelText = connectionIdNameMap.get(booking.manualConnectionId) || '';
+                      labelText = connectionIdNameMap.get(booking.manualConnectionId) || booking.sourceFeedLabel || '';
                     }
                   } else if (booking.enrichedGuestName) {
                     // New enrichment system (structural separation)
                     displayGuestName = booking.enrichedGuestName;
                     displayGuestCount = booking.enrichedGuestCount ?? displayGuestCount;
-                    if (booking.enrichedConnectionId) {
-                      resolvedConnectionColor = getConnectionColor(booking.enrichedConnectionId);
-                      labelText = connectionIdNameMap.get(booking.enrichedConnectionId) || '';
-                    }
+                    // Label comes from the iCal feed source name (e.g. "Airbnb"), not the connection
+                    labelText = booking.sourceFeedLabel || connectionIdNameMap.get(booking.enrichedConnectionId || '') || '';
                   } else if (booking.matchedConnectionId) {
                     // Legacy enrichment (from_fact_id in raw_data) — backwards compatibility
                     displayGuestName = booking.guestName || 'Reservation';
                     displayGuestCount = booking.guestCount;
-                    resolvedConnectionColor = getConnectionColor(booking.matchedConnectionId);
-                    labelText = connectionIdNameMap.get(booking.matchedConnectionId) || '';
+                    labelText = booking.sourceFeedLabel || connectionIdNameMap.get(booking.matchedConnectionId) || '';
                   } else if (booking.guestName && !['Guest', 'Reserved', 'Blocked', 'Not Available', 'Airbnb (Not available)', 'Closed Period', 'Not available'].includes(booking.guestName)) {
                     // iCal provided a real name (e.g., Lodgify includes names)
                     displayGuestName = booking.guestName;
                     displayGuestCount = booking.guestCount;
+                    labelText = booking.sourceFeedLabel || '';
+                  } else if (booking.sourceFeedLabel) {
+                    // No guest name, but we know the source — show it
+                    labelText = booking.sourceFeedLabel;
                   }
 
                   // CLEANER OVERRIDE: mask private data, force uniform appearance
@@ -1275,16 +1283,24 @@ export default function CalendarClient({ apiBase }: { apiBase: string }) {
                       borderWidth: '1.5px',
                     };
                     finalClasses = 'text-xs font-medium border text-gray-800 shadow-sm';
-                  } else if (isEnriched && resolvedConnectionColor) {
-                    // Enriched: translucent connection color fill, slightly darker solid border
+                  } else if (isManuallyResolved && resolvedConnectionColor) {
+                    // Manual override: host explicitly assigned a connection — use its color
                     finalStyle = {
                       backgroundColor: `${resolvedConnectionColor}cc`,
                       borderColor: resolvedConnectionColor,
                       borderWidth: '2px',
                     };
                     finalClasses = 'text-xs font-medium border text-gray-900 shadow-sm';
+                  } else if (booking.sourceColor) {
+                    // iCal feed color — applied from day 1 of sync, no enrichment needed
+                    finalStyle = {
+                      backgroundColor: `${booking.sourceColor}33`,
+                      borderColor: booking.sourceColor,
+                      borderWidth: '2px',
+                    };
+                    finalClasses = 'text-xs font-medium border text-gray-900 shadow-sm';
                   } else {
-                    // Unenriched → neutral light grey, thin border
+                    // No feed color set and not manually resolved → neutral grey
                     finalStyle = {
                       backgroundColor: '#f3f4f6',
                       borderColor: '#d1d5db',

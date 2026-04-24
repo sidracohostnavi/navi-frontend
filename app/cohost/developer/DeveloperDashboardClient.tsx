@@ -118,6 +118,14 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
     const [latestInviteId, setLatestInviteId] = useState<string | null>(null);
     const [needsAttentionDays, setNeedsAttentionDays] = useState(3);
     const [showNeedsAttentionOnly, setShowNeedsAttentionOnly] = useState(false);
+    const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+    const [editingNoteValue, setEditingNoteValue] = useState('');
+    const [backfilling, setBackfilling] = useState(false);
+    const [backfillResult, setBackfillResult] = useState<{ message: string; total_imported: number; total_reset: number; total_classified: number } | null>(null);
+    const [diagnosing, setDiagnosing] = useState(false);
+    const [diagResult, setDiagResult] = useState<Record<string, any> | null>(null);
+    const [classifying, setClassifying] = useState(false);
+    const [classifyResult, setClassifyResult] = useState<{ classified: number; guest_messages_found: number; by_type: Record<string, number>; message: string } | null>(null);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -185,6 +193,16 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
         }
     };
 
+    const updateNote = async (id: string, note: string) => {
+        await fetch('/api/cohost/admin/invites', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, action: 'update_note', note }),
+        });
+        setInvites(prev => prev.map(inv => inv.id === id ? { ...inv, note: note.trim() || null } : inv));
+        setEditingNoteId(null);
+    };
+
     const resendInviteEmail = async (inv: Invite) => {
         const email = resendEmail[inv.id]?.trim();
         if (!email) return;
@@ -199,6 +217,52 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
             setTimeout(() => setResendResult(prev => { const n = { ...prev }; delete n[inv.id]; return n; }), 3000);
         } finally {
             setResending(null);
+        }
+    };
+
+    const runDiagnostic = async () => {
+        setDiagnosing(true);
+        setDiagResult(null);
+        try {
+            const res = await fetch('/api/cohost/messaging/diagnostic');
+            const text = await res.text();
+            try {
+                setDiagResult(JSON.parse(text));
+            } catch {
+                setDiagResult({ error: `Server error: ${text.slice(0, 200)}` });
+            }
+        } finally {
+            setDiagnosing(false);
+        }
+    };
+
+    const runClassify = async () => {
+        setClassifying(true);
+        setClassifyResult(null);
+        try {
+            const res = await fetch('/api/cohost/messaging/classify', { method: 'POST' });
+            const text = await res.text();
+            try {
+                setClassifyResult(JSON.parse(text));
+            } catch {
+                setClassifyResult({ classified: 0, guest_messages_found: 0, by_type: {}, message: `Server error: ${text.slice(0, 200)}` });
+            }
+        } finally {
+            setClassifying(false);
+        }
+    };
+
+    const backfillMessages = async () => {
+        setBackfilling(true);
+        setBackfillResult(null);
+        try {
+            const res = await fetch('/api/cohost/messaging/backfill', { method: 'POST' });
+            const data = await res.json();
+            setBackfillResult(data);
+        } catch {
+            setBackfillResult({ message: 'Request failed — check console', total_imported: 0, total_reset: 0, total_classified: 0 });
+        } finally {
+            setBackfilling(false);
         }
     };
 
@@ -333,7 +397,7 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
                                             type="text"
                                             value={newNote}
                                             onChange={e => setNewNote(e.target.value)}
-                                            placeholder="Note (e.g. John – 3 properties)"
+                                            placeholder="Name (e.g. John Smith)"
                                             className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[#FA5A5A] focus:ring-1 focus:ring-[#FA5A5A]"
                                             onKeyDown={e => e.key === 'Enter' && !creating && createInvite()}
                                         />
@@ -346,6 +410,64 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
                                         </button>
                                     </div>
                                     <p className="text-xs text-gray-400 mt-2">Link is auto-copied to clipboard on creation.</p>
+                                </div>
+
+                                <div className="bg-white rounded-xl border border-gray-200 p-5 mt-4">
+                                    <h3 className="text-sm font-semibold text-gray-700 mb-1">Messaging Tools</h3>
+                                    <p className="text-xs text-gray-400 mb-3">
+                                        Import historical guest messages from Gmail into the inbox. Scans emails already synced from your label,
+                                        matches them to bookings (up to 365 days back), and adds them to conversations. Safe to run multiple times.
+                                    </p>
+                                    <div className="flex flex-wrap items-center gap-3 mb-4">
+                                        <button
+                                            onClick={runClassify}
+                                            disabled={classifying}
+                                            className="px-4 py-2 bg-teal-600 text-white text-sm font-medium rounded-lg hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap transition-colors"
+                                        >
+                                            {classifying ? 'Classifying...' : 'Classify Emails'}
+                                        </button>
+                                        <button
+                                            onClick={backfillMessages}
+                                            disabled={backfilling}
+                                            className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:opacity-50 whitespace-nowrap transition-colors"
+                                        >
+                                            {backfilling ? 'Importing...' : 'Backfill Inbox from Gmail'}
+                                        </button>
+                                        <button
+                                            onClick={runDiagnostic}
+                                            disabled={diagnosing}
+                                            className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 whitespace-nowrap transition-colors"
+                                        >
+                                            {diagnosing ? 'Checking...' : 'Diagnose Inbox'}
+                                        </button>
+                                    </div>
+                                    {classifyResult && (
+                                        <div className="mb-3 p-3 bg-teal-50 rounded-lg border border-teal-200">
+                                            <p className="text-sm text-teal-800 font-medium mb-1">{classifyResult.message}</p>
+                                            <div className="flex flex-wrap gap-3">
+                                                {Object.entries(classifyResult.by_type).sort((a, b) => b[1] - a[1]).map(([type, count]) => (
+                                                    <span key={type} className={`text-xs font-mono px-2 py-0.5 rounded ${type === 'guest_message' ? 'bg-teal-200 text-teal-900 font-semibold' : 'bg-gray-100 text-gray-600'}`}>
+                                                        {type}: {count}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {backfillResult && (
+                                        <p className={`text-sm mb-3 ${backfillResult.total_imported > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+                                            {backfillResult.message}
+                                        </p>
+                                    )}
+                                    {diagResult && (
+                                        <div className="mt-2 p-3 bg-gray-900 rounded-lg border border-gray-700">
+                                            <p className="text-xs text-gray-400 mb-2 font-semibold uppercase tracking-wide">
+                                                {diagResult.blocked_at ? `⛔ Blocked at: ${diagResult.blocked_at}` : 'Diagnostic Result'}
+                                            </p>
+                                            <pre className="text-xs text-green-300 font-mono whitespace-pre-wrap overflow-auto max-h-96">
+                                                {JSON.stringify(diagResult, null, 2)}
+                                            </pre>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -360,7 +482,7 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
                                             type="text"
                                             value={newNote}
                                             onChange={e => setNewNote(e.target.value)}
-                                            placeholder="Note (e.g. Sarah – beach house)"
+                                            placeholder="Name (e.g. Sarah Jones)"
                                             className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[#FA5A5A] focus:ring-1 focus:ring-[#FA5A5A]"
                                             onKeyDown={e => e.key === 'Enter' && !creating && createInvite()}
                                         />
@@ -383,7 +505,7 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
                                             <thead className="bg-gray-50 border-b border-gray-200">
                                                 <tr>
                                                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Invite Link</th>
-                                                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Note</th>
+                                                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
                                                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Created</th>
                                                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
                                                     <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Used By</th>
@@ -414,7 +536,31 @@ export default function DeveloperDashboardClient({ adminEmail }: { adminEmail: s
                                                                     </button>
                                                                 </div>
                                                             </td>
-                                                            <td className="px-4 py-3 text-gray-600 text-xs">{inv.note || <span className="text-gray-300">—</span>}</td>
+                                                            <td className="px-4 py-3 text-xs">
+                                                                {editingNoteId === inv.id ? (
+                                                                    <input
+                                                                        type="text"
+                                                                        value={editingNoteValue}
+                                                                        onChange={e => setEditingNoteValue(e.target.value)}
+                                                                        onBlur={() => updateNote(inv.id, editingNoteValue)}
+                                                                        onKeyDown={e => {
+                                                                            if (e.key === 'Enter') updateNote(inv.id, editingNoteValue);
+                                                                            if (e.key === 'Escape') setEditingNoteId(null);
+                                                                        }}
+                                                                        autoFocus
+                                                                        className="w-36 px-2 py-1 border border-[#FA5A5A] rounded text-xs focus:outline-none"
+                                                                    />
+                                                                ) : (
+                                                                    <button
+                                                                        onClick={() => { setEditingNoteId(inv.id); setEditingNoteValue(inv.note || ''); }}
+                                                                        className="text-left text-gray-600 hover:text-gray-900 group flex items-center gap-1"
+                                                                        title="Click to edit"
+                                                                    >
+                                                                        {inv.note || <span className="text-gray-300">—</span>}
+                                                                        <span className="opacity-0 group-hover:opacity-40 text-gray-400 text-[10px]">✎</span>
+                                                                    </button>
+                                                                )}
+                                                            </td>
                                                             <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{formatDate(inv.created_at)}</td>
                                                             <td className="px-4 py-3">
                                                                 {status === 'used' && <StatusBadge label="Used" color="green" />}
