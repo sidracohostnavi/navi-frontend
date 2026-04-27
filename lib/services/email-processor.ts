@@ -268,6 +268,9 @@ export class EmailProcessor {
         const results: any[] = [];
         let msgsToProcess = messages || [];
 
+        // otaPlatforms is needed both in the fetch block and per-message (OTA source tagging)
+        let otaPlatforms: OtaPlatform[] = [];
+
         // If no messages provided, fetch them (which now invokes pagination + diffing)
         if (msgsToProcess.length === 0) {
             console.log(`[EmailProcessor] ========== PROCESS MESSAGES ==========`);
@@ -280,7 +283,7 @@ export class EmailProcessor {
                 .single();
 
             const provider = (conn?.email_provider as string) || 'gmail';
-            const otaPlatforms = (conn?.ota_platforms as OtaPlatform[]) ?? [];
+            otaPlatforms = (conn?.ota_platforms as OtaPlatform[]) ?? [];
 
             // SMTP connections are send-only — no inbox to ingest from
             if (provider === 'smtp') {
