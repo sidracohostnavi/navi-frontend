@@ -18,8 +18,6 @@ import { MicrosoftMailService } from '@/lib/services/microsoft-mail-service'
 import { SmtpMailService } from '@/lib/services/smtp-mail-service'
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-
 export async function POST(request: NextRequest) {
   try {
     const { conversation_id, body, draft_id, edited } = await request.json()
@@ -216,6 +214,7 @@ async function deliverDirectEmail(
   }
 
   const fromAddress = process.env.EMAIL_FROM || 'noreply@cohostnavi.com'
+  const resend = new Resend(process.env.RESEND_API_KEY)
 
   try {
     await resend.emails.send({
